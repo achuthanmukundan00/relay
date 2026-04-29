@@ -18,6 +18,29 @@ test('GET /health returns ok true', async () => {
   });
 });
 
+test('GET / returns gateway metadata for agent probes', async () => {
+  await withUpstream(async (upstream) => {
+    const res = await createApp(testConfig(upstream.url)).fetch('/');
+
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.object, 'gateway');
+    assert.deepEqual(body.endpoints, ['/health', '/v1/models', '/v1/chat/completions', '/v1/completions', '/v1/messages']);
+  });
+});
+
+test('OPTIONS returns CORS-friendly probe response', async () => {
+  await withUpstream(async (upstream) => {
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'OPTIONS',
+    });
+
+    assert.equal(res.status, 204);
+    assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    assert.match(res.headers.get('access-control-allow-methods') ?? '', /POST/);
+  });
+});
+
 test('GET /v1/models passes through upstream model list', async () => {
   await withUpstream(async (upstream) => {
     upstream.handler = (req, res) => {
@@ -84,6 +107,25 @@ test('POST /v1/chat/completions returns OpenAI-compatible non-streaming completi
     assert.equal(json.object, 'chat.completion');
     assert.equal(json.choices[0].message.role, 'assistant');
     assert.equal(json.choices[0].message.content, 'hi there');
+  });
+});
+
+test('POST /v1/completions maps legacy prompts to chat completions', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (req, res, body) => {
+      assert.equal(req.url, '/v1/chat/completions');
+      assert.deepEqual((body as any).messages, [{ role: 'user', content: 'hello' }]);
+      sendJson(res, 200, upstreamChat('llama', 'hi legacy'));
+    };
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/completions', {
+      method: 'POST',
+      body: { model: 'llama', prompt: 'hello', max_tokens: 16 },
+    });
+
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.object, 'text_completion');
+    assert.equal(json.choices[0].text, 'hi legacy');
   });
 });
 

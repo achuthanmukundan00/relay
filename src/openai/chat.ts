@@ -90,6 +90,15 @@ export async function createChatCompletion(config: AppConfig, store: CompletionS
   return jsonResponse(completion);
 }
 
+export async function createCompletionShim(config: AppConfig, store: CompletionStore, body: unknown): Promise<Response> {
+  if (!isObject(body)) throw new GatewayError(400, 'JSON body must be an object');
+  const chatBody = completionRequestToChat(body);
+  const chatResponse = await createChatCompletion(config, store, chatBody);
+  if (chatBody.stream === true) return chatResponse;
+  const chat = await chatResponse.json();
+  return jsonResponse(chatCompletionToTextCompletion(chat, body));
+}
+
 export function listStoredCompletions(store: CompletionStore, url: URL): Response {
   const data = store.list(url.searchParams);
   return jsonResponse(listShape(data));
@@ -131,6 +140,41 @@ export function getStoredMessages(store: CompletionStore, id: string, url: URL):
   const limit = Number.parseInt(url.searchParams.get('limit') ?? `${data.length || 20}`, 10);
   data = data.slice(0, Number.isFinite(limit) && limit > 0 ? limit : data.length);
   return jsonResponse(listShape(data));
+}
+
+function completionRequestToChat(input: JsonObject): JsonObject {
+  const chat: JsonObject = {};
+  for (const key of [
+    'model', 'temperature', 'top_p', 'max_tokens', 'stream', 'stream_options', 'stop',
+    'frequency_penalty', 'presence_penalty', 'seed', 'n', 'logprobs', 'metadata', 'user',
+  ]) {
+    if (input[key] !== undefined) chat[key] = input[key];
+  }
+  chat.messages = [{ role: 'user', content: normalizePrompt(input.prompt) }];
+  return chat;
+}
+
+function normalizePrompt(prompt: unknown): string {
+  if (typeof prompt === 'string') return prompt;
+  if (Array.isArray(prompt)) return prompt.map((item) => typeof item === 'string' ? item : String(item ?? '')).join('\n');
+  if (prompt === undefined || prompt === null) return '';
+  return String(prompt);
+}
+
+function chatCompletionToTextCompletion(chat: JsonObject, original: JsonObject): JsonObject {
+  return {
+    id: typeof chat.id === 'string' ? chat.id : `cmpl-${crypto.randomUUID()}`,
+    object: 'text_completion',
+    created: typeof chat.created === 'number' ? chat.created : Math.floor(Date.now() / 1000),
+    model: chat.model ?? original.model,
+    choices: Array.isArray(chat.choices) ? chat.choices.map((choice: JsonObject) => ({
+      text: typeof choice?.message?.content === 'string' ? choice.message.content : '',
+      index: typeof choice?.index === 'number' ? choice.index : 0,
+      logprobs: choice?.logprobs ?? null,
+      finish_reason: choice?.finish_reason ?? null,
+    })) : [],
+    usage: chat.usage,
+  };
 }
 
 function normalizeChatRequest(input: JsonObject, config: AppConfig): JsonObject {
