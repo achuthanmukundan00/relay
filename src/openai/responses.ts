@@ -33,7 +33,7 @@ export class ResponseStore {
 
 export async function createResponse(config: AppConfig, store: ResponseStore, body: unknown): Promise<Response> {
   if (!isObject(body)) throw new GatewayError(400, 'JSON body must be an object');
-  const chatRequest = responseRequestToChat(body);
+  const chatRequest = responseRequestToChat(body, config);
   if (body.stream === true) return streamResponse(config, chatRequest);
 
   const chat = await upstreamJson(config, '/v1/chat/completions', {
@@ -57,7 +57,7 @@ export function deleteResponse(store: ResponseStore, id: string): Response {
   return jsonResponse({ id, object: 'response.deleted', deleted: true });
 }
 
-function responseRequestToChat(input: JsonObject): JsonObject {
+function responseRequestToChat(input: JsonObject, config: AppConfig): JsonObject {
   const messages: JsonObject[] = [];
   if (typeof input.instructions === 'string' && input.instructions.length > 0) {
     messages.push({ role: 'system', content: input.instructions });
@@ -78,8 +78,15 @@ function responseRequestToChat(input: JsonObject): JsonObject {
     if (input[key] !== undefined) chat[key] = input[key];
   }
   if (input.max_output_tokens !== undefined) chat.max_tokens = input.max_output_tokens;
+  applySamplingDefaults(chat, config.samplingDefaults);
   normalizeTools(chat);
   return chat;
+}
+
+function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {
+  for (const [key, value] of Object.entries(defaults)) {
+    if (value !== undefined && body[key] === undefined) body[key] = value;
+  }
 }
 
 function chatCompletionToResponse(chat: unknown, requestedModel: unknown): JsonObject {

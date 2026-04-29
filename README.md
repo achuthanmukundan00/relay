@@ -6,7 +6,7 @@ Relay is a lightweight local agent gateway for llama.cpp. It exposes OpenAI-comp
 
 Relay is a compatibility gateway, not an inference engine. It does not load models, run sampling, or replace llama.cpp. It accepts the endpoint shapes used by agent tools, normalizes them to the best-supported llama.cpp `/v1/chat/completions` request, and translates responses back into the provider shape the client expects.
 
-By default Relay listens on `127.0.0.1:1234` and proxies to the llama.cpp upstream on `http://127.0.0.1:8080`.
+By default Relay listens on `127.0.0.1:1234` and proxies to the llama.cpp upstream on `http://127.0.0.1:8080/v1`.
 
 ## Why It Exists
 
@@ -77,7 +77,7 @@ llama-server --model /path/to/model.gguf --host 127.0.0.1 --port 8080
 Then start Relay:
 
 ```sh
-PORT=1234 UPSTREAM_BASE_URL=http://127.0.0.1:8080 npm start
+PORT=1234 UPSTREAM_BASE_URL=http://127.0.0.1:8080/v1 npm start
 ```
 
 ## Smoke Tests
@@ -94,6 +94,14 @@ curl -X POST http://127.0.0.1:1234/v1/chat/completions \
     "messages": [{"role": "user", "content": "Say OK"}],
     "max_tokens": 16
   }'
+```
+
+Helper scripts are available for the local Relay-on-1234 and llama.cpp-on-8080 stack:
+
+```sh
+./scripts/check-local-stack.sh
+./scripts/smoke-openai.sh
+./scripts/smoke-anthropic.sh
 ```
 
 ## Client Examples
@@ -204,9 +212,23 @@ npm start
 
 Copy `.env.example` and adjust it for your machine. Keep `HOST=127.0.0.1` for local-only use. Set `HOST=0.0.0.0` only when you intentionally want LAN or container exposure.
 
+### Local systemd deployment
+
+Use [docs/deploy-systemd.md](docs/deploy-systemd.md) for the full two-service path:
+
+- llama.cpp `llama-server` on `127.0.0.1:8080`.
+- Relay on `127.0.0.1:1234`.
+- clients point to Relay, not llama.cpp.
+
+Review generated files locally before installing:
+
+```sh
+./scripts/render-systemd.sh
+```
+
 ### Docker Compose
 
-The compose file builds the gateway image, exposes `1234:1234`, and points `UPSTREAM_BASE_URL` at the host llama.cpp server on port 8080 by default.
+The compose file builds the gateway image, exposes `1234:1234`, and points `UPSTREAM_BASE_URL` at the host llama.cpp `/v1` API on port 8080 by default.
 
 ```sh
 cp .env.example .env
@@ -215,22 +237,8 @@ docker compose up --build
 
 ### systemd
 
-Create a dedicated user and install the app under `/opt/relay`:
+Repo-provided systemd examples and helper scripts are documented in [docs/deploy-systemd.md](docs/deploy-systemd.md). The scripts touch `/etc` and systemd only when you manually review and run them.
 
-```sh
-sudo useradd --system --home /opt/relay --shell /usr/sbin/nologin relay
-sudo mkdir -p /opt/relay /etc/relay
-sudo cp -R . /opt/relay
-sudo cp .env.example /etc/relay/relay.env
-sudo chown -R relay:relay /opt/relay
-sudo cp deploy/relay.service /etc/systemd/system/relay.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now relay
-```
+## Agent Notes
 
-Check status and logs:
-
-```sh
-systemctl status relay
-journalctl -u relay -f
-```
+See [docs/agents.md](docs/agents.md) for Cline/Pi/Codex-style client base URLs and coding-agent sampling guidance.

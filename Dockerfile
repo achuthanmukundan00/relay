@@ -9,7 +9,7 @@ RUN addgroup -S relay && adduser -S relay -G relay
 
 ENV HOST=0.0.0.0 \
     PORT=1234 \
-    UPSTREAM_BASE_URL=http://host.docker.internal:8080 \
+    UPSTREAM_BASE_URL=http://host.docker.internal:8080/v1 \
     MAX_REQUEST_BODY_BYTES=1048576
 
 EXPOSE 1234

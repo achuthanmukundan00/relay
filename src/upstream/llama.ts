@@ -27,7 +27,7 @@ export async function upstreamFetch(config: AppConfig, path: string, init: Reque
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
   try {
-    const response = await fetch(`${config.upstreamBaseUrl}${path}`, {
+    const response = await fetch(upstreamUrl(config.upstreamBaseUrl, path), {
       ...init,
       signal: controller.signal,
     });
@@ -40,4 +40,11 @@ export async function upstreamFetch(config: AppConfig, path: string, init: Reque
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function upstreamUrl(baseUrl: string, path: string): string {
+  if (baseUrl.endsWith('/v1') && path.startsWith('/v1/')) {
+    return `${baseUrl}${path.slice('/v1'.length)}`;
+  }
+  return `${baseUrl}${path}`;
 }

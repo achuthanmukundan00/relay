@@ -8,8 +8,9 @@ test('loads spec defaults', () => {
 
   assert.equal(config.port, 1234);
   assert.equal(config.host, '127.0.0.1');
-  assert.equal(config.upstreamBaseUrl, 'http://127.0.0.1:8080');
+  assert.equal(config.upstreamBaseUrl, 'http://127.0.0.1:8080/v1');
   assert.equal(config.defaultModel, undefined);
+  assert.deepEqual(config.samplingDefaults, {});
   assert.equal(config.requestTimeoutMs, 600_000);
   assert.equal(config.logLevel, 'info');
   assert.equal(config.apiKey, undefined);
@@ -22,6 +23,12 @@ test('loads overrides from environment', () => {
     HOST: '0.0.0.0',
     UPSTREAM_BASE_URL: 'http://llama.local:8080/',
     DEFAULT_MODEL: 'local-model',
+    DEFAULT_TEMPERATURE: '1.0',
+    DEFAULT_TOP_P: '0.95',
+    DEFAULT_TOP_K: '20',
+    DEFAULT_MIN_P: '0.0',
+    DEFAULT_PRESENCE_PENALTY: '1.5',
+    DEFAULT_REPETITION_PENALTY: '1.0',
     REQUEST_TIMEOUT_SECONDS: '12',
     LOG_LEVEL: 'debug',
     API_KEY: 'secret',
@@ -32,6 +39,14 @@ test('loads overrides from environment', () => {
   assert.equal(config.host, '0.0.0.0');
   assert.equal(config.upstreamBaseUrl, 'http://llama.local:8080');
   assert.equal(config.defaultModel, 'local-model');
+  assert.deepEqual(config.samplingDefaults, {
+    temperature: 1.0,
+    top_p: 0.95,
+    top_k: 20,
+    min_p: 0.0,
+    presence_penalty: 1.5,
+    repeat_penalty: 1.0,
+  });
   assert.equal(config.requestTimeoutMs, 12_000);
   assert.equal(config.logLevel, 'debug');
   assert.equal(config.apiKey, 'secret');

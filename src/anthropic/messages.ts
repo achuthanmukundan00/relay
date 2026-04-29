@@ -11,7 +11,7 @@ export async function handleAnthropicMessages(config: AppConfig, request: Reques
   try {
     authorizeAnthropic(config, request);
     const body = await readJson(request);
-    const chatRequest = anthropicRequestToChat(body);
+    const chatRequest = anthropicRequestToChat(body, config);
     if (body.stream === true) return await streamAnthropicMessage(config, chatRequest);
     const chat = await upstreamJson(config, '/v1/chat/completions', {
       method: 'POST',
@@ -42,7 +42,7 @@ async function readJson(request: Request): Promise<JsonObject> {
   }
 }
 
-function anthropicRequestToChat(input: JsonObject): JsonObject {
+function anthropicRequestToChat(input: JsonObject, config: AppConfig): JsonObject {
   if (input.max_tokens === undefined) {
     throw new GatewayError(400, 'max_tokens is required');
   }
@@ -64,9 +64,16 @@ function anthropicRequestToChat(input: JsonObject): JsonObject {
   if (tools) chat.tools = tools;
   const toolChoice = normalizeAnthropicToolChoice(input.tool_choice);
   if (toolChoice !== undefined) chat.tool_choice = toolChoice;
+  applySamplingDefaults(chat, config.samplingDefaults);
   // TODO: Map Anthropic thinking to model-specific reasoning controls when an
   // upstream supports it. For now it is accepted and intentionally not forwarded.
   return chat;
+}
+
+function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {
+  for (const [key, value] of Object.entries(defaults)) {
+    if (value !== undefined && body[key] === undefined) body[key] = value;
+  }
 }
 
 function normalizeSystem(system: unknown): string | undefined {

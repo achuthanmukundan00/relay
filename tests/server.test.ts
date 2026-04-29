@@ -110,6 +110,37 @@ test('POST /v1/chat/completions returns OpenAI-compatible non-streaming completi
   });
 });
 
+test('POST /v1/chat/completions applies configurable sampling defaults', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (_req, res, body) => {
+      assert.equal((body as any).temperature, 1.0);
+      assert.equal((body as any).top_p, 0.95);
+      assert.equal((body as any).top_k, 20);
+      assert.equal((body as any).min_p, 0.0);
+      assert.equal((body as any).presence_penalty, 1.5);
+      assert.equal((body as any).repeat_penalty, 1.0);
+      sendJson(res, 200, upstreamChat('llama', 'hi there'));
+    };
+    const app = createApp({
+      ...testConfig(upstream.url),
+      samplingDefaults: {
+        temperature: 1.0,
+        top_p: 0.95,
+        top_k: 20,
+        min_p: 0.0,
+        presence_penalty: 1.5,
+        repeat_penalty: 1.0,
+      },
+    });
+    const res = await app.fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: { model: 'llama', messages: [{ role: 'user', content: 'hello' }] },
+    });
+
+    assert.equal(res.status, 200);
+  });
+});
+
 test('POST /v1/completions maps legacy prompts to chat completions', async () => {
   await withUpstream(async (upstream) => {
     upstream.handler = async (req, res, body) => {
@@ -436,6 +467,7 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     port: 8080,
     host: '127.0.0.1',
     upstreamBaseUrl,
+    samplingDefaults: {},
     requestTimeoutMs: 1_000,
     logLevel: 'info',
     completionTtlMs: 3_600_000,

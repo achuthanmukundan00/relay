@@ -8,6 +8,6 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "engines": {
-    "node": ">=25"
+    "node": ">=22"
   }
 }

@@ -191,11 +191,18 @@ function normalizeChatRequest(input: JsonObject, config: AppConfig): JsonObject 
   if (body.max_tokens === undefined && input.max_completion_tokens !== undefined) {
     body.max_tokens = input.max_completion_tokens;
   }
+  applySamplingDefaults(body, config.samplingDefaults);
   body.messages = normalizeMessages(body.messages, config);
   normalizeTools(body);
   // llama.cpp accepts OpenAI JSON-mode fields on recent builds. Strict json_schema
   // enforcement is not claimed here; the gateway passes the request through as-is.
   return body;
+}
+
+function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {
+  for (const [key, value] of Object.entries(defaults)) {
+    if (value !== undefined && body[key] === undefined) body[key] = value;
+  }
 }
 
 async function streamChatCompletion(config: AppConfig, body: JsonObject): Promise<Response> {

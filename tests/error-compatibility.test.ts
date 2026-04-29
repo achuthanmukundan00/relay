@@ -62,6 +62,7 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     port: 8080,
     host: '127.0.0.1',
     upstreamBaseUrl,
+    samplingDefaults: {},
     requestTimeoutMs: 50,
     logLevel: 'silent',
     completionTtlMs: 3_600_000,
