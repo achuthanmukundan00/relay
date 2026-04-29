@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AppConfig } from './config.ts';
 import { errorResponse, GatewayError, jsonResponse, openAIError } from './errors.ts';
 import { handleAnthropicMessages } from './anthropic/messages.ts';
-import { createChatCompletion, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
+import { createChatCompletion, createCompletionShim, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
 import { handleModels } from './openai/models.ts';
 import { createResponse, deleteResponse, getResponse, ResponseStore } from './openai/responses.ts';
 import { createLogger } from './logger.ts';
@@ -27,6 +27,17 @@ export function createApp(config: AppConfig): App {
       const url = new URL(request.url);
       const path = url.pathname;
       let response: Response;
+      if (request.method === 'OPTIONS') {
+        return withRequestId(optionsResponse(), requestId);
+      }
+      if (request.method === 'GET' && path === '/') {
+        response = jsonResponse({
+          object: 'gateway',
+          name: 'relay',
+          endpoints: ['/health', '/v1/models', '/v1/chat/completions', '/v1/completions', '/v1/messages'],
+        });
+        return withRequestId(response, requestId);
+      }
       if (request.method === 'GET' && path === '/health') {
         response = jsonResponse({ ok: true });
         return withRequestId(response, requestId);
@@ -56,6 +67,10 @@ export function createApp(config: AppConfig): App {
           response = listStoredCompletions(store, url);
           return withRequestId(response, requestId);
         }
+      }
+      if (path === '/v1/completions' && request.method === 'POST') {
+        response = await createCompletionShim(config, store, await readJson(request));
+        return withRequestId(response, requestId);
       }
       if (path === '/v1/responses' && request.method === 'POST') {
         response = await createResponse(config, responseStore, await readJson(request));
@@ -123,6 +138,18 @@ export function createApp(config: AppConfig): App {
       };
     },
   };
+}
+
+function optionsResponse(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET,POST,DELETE,OPTIONS',
+      'access-control-allow-headers': 'authorization,content-type,x-api-key,x-request-id,anthropic-version,anthropic-beta',
+      'access-control-max-age': '86400',
+    },
+  });
 }
 
 function withRequestId(response: Response, requestId: string): Response {
