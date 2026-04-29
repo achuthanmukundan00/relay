@@ -6,7 +6,7 @@ Relay is a lightweight local agent gateway for llama.cpp. It exposes OpenAI-comp
 
 Relay is a compatibility gateway, not an inference engine. It does not load models, run sampling, or replace llama.cpp. It accepts the endpoint shapes used by agent tools, normalizes them to the best-supported llama.cpp `/v1/chat/completions` request, and translates responses back into the provider shape the client expects.
 
-By default Relay listens on `127.0.0.1:1234` and proxies to the llama.cpp upstream on `http://127.0.0.1:8081`.
+By default Relay listens on `127.0.0.1:1234` and proxies to the llama.cpp upstream on `http://127.0.0.1:8080`.
 
 ## Why It Exists
 
@@ -55,7 +55,7 @@ In another terminal, run the smoke tests below. If you set `API_KEY`, add `-H "A
 Final local port topology:
 
 - Relay listens on `127.0.0.1:1234`.
-- llama.cpp upstream listens on `127.0.0.1:8081`.
+- llama.cpp upstream listens on `127.0.0.1:8080`.
 - OpenAI-compatible agents use `http://127.0.0.1:1234/v1`.
 - Anthropic-compatible clients use `http://127.0.0.1:1234/v1/messages`.
 
@@ -65,19 +65,19 @@ Start `llama-server` on the upstream port:
 llama-server \
   --model /path/to/model.gguf \
   --host 127.0.0.1 \
-  --port 8081
+  --port 8080
 ```
 
 One-line equivalent:
 
 ```sh
-llama-server --model /path/to/model.gguf --host 127.0.0.1 --port 8081
+llama-server --model /path/to/model.gguf --host 127.0.0.1 --port 8080
 ```
 
 Then start Relay:
 
 ```sh
-PORT=1234 UPSTREAM_BASE_URL=http://127.0.0.1:8081 npm start
+PORT=1234 UPSTREAM_BASE_URL=http://127.0.0.1:8080 npm start
 ```
 
 ## Smoke Tests
@@ -206,7 +206,7 @@ Copy `.env.example` and adjust it for your machine. Keep `HOST=127.0.0.1` for lo
 
 ### Docker Compose
 
-The compose file builds the gateway image, exposes `1234:1234`, and points `UPSTREAM_BASE_URL` at the host llama.cpp server on port 8081 by default.
+The compose file builds the gateway image, exposes `1234:1234`, and points `UPSTREAM_BASE_URL` at the host llama.cpp server on port 8080 by default.
 
 ```sh
 cp .env.example .env

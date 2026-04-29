@@ -8,7 +8,7 @@ test('loads spec defaults', () => {
 
   assert.equal(config.port, 1234);
   assert.equal(config.host, '127.0.0.1');
-  assert.equal(config.upstreamBaseUrl, 'http://127.0.0.1:8081');
+  assert.equal(config.upstreamBaseUrl, 'http://127.0.0.1:8080');
   assert.equal(config.defaultModel, undefined);
   assert.equal(config.requestTimeoutMs, 600_000);
   assert.equal(config.logLevel, 'info');

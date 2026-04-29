@@ -5,7 +5,7 @@ services:
     environment:
       - HOST=${HOST:-0.0.0.0}
       - PORT=${PORT:-1234}
-      - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-http://host.docker.internal:8081}
+      - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-http://host.docker.internal:8080}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-}
       - REQUEST_TIMEOUT_SECONDS=${REQUEST_TIMEOUT_SECONDS:-600}
       - MAX_REQUEST_BODY_BYTES=${MAX_REQUEST_BODY_BYTES:-1048576}
