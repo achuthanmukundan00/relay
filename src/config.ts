@@ -12,9 +12,9 @@ export type AppConfig = {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
-    port: readInteger(env.PORT, 8080, 'PORT'),
+    port: readInteger(env.PORT, 1234, 'PORT'),
     host: readString(env.HOST, '127.0.0.1'),
-    upstreamBaseUrl: trimTrailingSlash(readString(env.UPSTREAM_BASE_URL, 'http://127.0.0.1:1234')),
+    upstreamBaseUrl: trimTrailingSlash(readString(env.UPSTREAM_BASE_URL, 'http://127.0.0.1:8081')),
     defaultModel: readOptional(env.DEFAULT_MODEL),
     requestTimeoutMs: readInteger(env.REQUEST_TIMEOUT_SECONDS, 600, 'REQUEST_TIMEOUT_SECONDS') * 1000,
     logLevel: readString(env.LOG_LEVEL, 'info'),

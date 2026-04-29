@@ -6,9 +6,9 @@ import { loadConfig } from '../src/config.ts';
 test('loads spec defaults', () => {
   const config = loadConfig({});
 
-  assert.equal(config.port, 8080);
+  assert.equal(config.port, 1234);
   assert.equal(config.host, '127.0.0.1');
-  assert.equal(config.upstreamBaseUrl, 'http://127.0.0.1:1234');
+  assert.equal(config.upstreamBaseUrl, 'http://127.0.0.1:8081');
   assert.equal(config.defaultModel, undefined);
   assert.equal(config.requestTimeoutMs, 600_000);
   assert.equal(config.logLevel, 'info');

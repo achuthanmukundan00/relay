@@ -8,10 +8,10 @@ COPY src ./src
 RUN addgroup -S relay && adduser -S relay -G relay
 
 ENV HOST=0.0.0.0 \
-    PORT=8080 \
-    UPSTREAM_BASE_URL=http://host.docker.internal:1234
+    PORT=1234 \
+    UPSTREAM_BASE_URL=http://host.docker.internal:8081
 
-EXPOSE 8080
+EXPOSE 1234
 
 USER relay
 
