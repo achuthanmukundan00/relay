@@ -22,57 +22,74 @@ export function createApp(config: AppConfig): App {
   const responseStore = new ResponseStore();
 
   async function handler(request: Request): Promise<Response> {
+    const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID();
     try {
       const url = new URL(request.url);
       const path = url.pathname;
+      let response: Response;
       if (request.method === 'GET' && path === '/health') {
-        return jsonResponse({ ok: true });
+        response = jsonResponse({ ok: true });
+        return withRequestId(response, requestId);
       }
       if (path === '/v1/messages') {
-        if (request.method === 'POST') return await handleAnthropicMessages(config, request);
-        return jsonResponse({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, 404);
+        if (request.method === 'POST') response = await handleAnthropicMessages(config, request);
+        else response = jsonResponse({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, 404);
+        return withRequestId(response, requestId);
       }
       const authError = authorizeOpenAI(config, request, path);
-      if (authError) return authError;
+      if (authError) return withRequestId(authError, requestId);
       if (request.method === 'GET' && path === '/v1/models') {
-        return await handleModels(config);
+        response = await handleModels(config);
+        return withRequestId(response, requestId);
       }
       const modelMatch = path.match(/^\/v1\/models\/([^/]+)$/);
       if (request.method === 'GET' && modelMatch) {
-        return await handleModels(config, decodeURIComponent(modelMatch[1]));
+        response = await handleModels(config, decodeURIComponent(modelMatch[1]));
+        return withRequestId(response, requestId);
       }
       if (path === '/v1/chat/completions') {
         if (request.method === 'POST') {
-          return await createChatCompletion(config, store, await readJson(request));
+          response = await createChatCompletion(config, store, await readJson(request));
+          return withRequestId(response, requestId);
         }
         if (request.method === 'GET') {
-          return listStoredCompletions(store, url);
+          response = listStoredCompletions(store, url);
+          return withRequestId(response, requestId);
         }
       }
       if (path === '/v1/responses' && request.method === 'POST') {
-        return await createResponse(config, responseStore, await readJson(request));
+        response = await createResponse(config, responseStore, await readJson(request));
+        return withRequestId(response, requestId);
       }
       const responseMatch = path.match(/^\/v1\/responses\/([^/]+)$/);
       if (responseMatch) {
         const id = decodeURIComponent(responseMatch[1]);
-        if (request.method === 'GET') return getResponse(responseStore, id);
-        if (request.method === 'DELETE') return deleteResponse(responseStore, id);
+        if (request.method === 'GET') response = getResponse(responseStore, id);
+        else if (request.method === 'DELETE') response = deleteResponse(responseStore, id);
+        else response = openAIError(404, 'Not found');
+        return withRequestId(response, requestId);
       }
       const messageMatch = path.match(/^\/v1\/chat\/completions\/([^/]+)\/messages$/);
       if (request.method === 'GET' && messageMatch) {
-        return getStoredMessages(store, decodeURIComponent(messageMatch[1]), url);
+        response = getStoredMessages(store, decodeURIComponent(messageMatch[1]), url);
+        return withRequestId(response, requestId);
       }
       const completionMatch = path.match(/^\/v1\/chat\/completions\/([^/]+)$/);
       if (completionMatch) {
         const id = decodeURIComponent(completionMatch[1]);
-        if (request.method === 'GET') return getStoredCompletion(store, id);
-        if (request.method === 'POST') return await updateStoredCompletion(store, id, await readJson(request));
-        if (request.method === 'DELETE') return deleteStoredCompletion(store, id);
+        if (request.method === 'GET') response = getStoredCompletion(store, id);
+        else if (request.method === 'POST') response = await updateStoredCompletion(store, id, await readJson(request));
+        else if (request.method === 'DELETE') response = deleteStoredCompletion(store, id);
+        else response = openAIError(404, 'Not found');
+        return withRequestId(response, requestId);
       }
-      return openAIError(404, 'Not found');
+      return withRequestId(openAIError(404, 'Not found'), requestId);
     } catch (error) {
-      logger.error('request failed', { error: error instanceof Error ? error.message : String(error) });
-      return errorResponse(error);
+      logger.error('request failed', {
+        request_id: requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return withRequestId(errorResponse(error), requestId);
     }
   }
 
@@ -106,6 +123,11 @@ export function createApp(config: AppConfig): App {
       };
     },
   };
+}
+
+function withRequestId(response: Response, requestId: string): Response {
+  response.headers.set('x-request-id', requestId);
+  return response;
 }
 
 function authorizeOpenAI(config: AppConfig, request: Request, path: string): Response | undefined {
