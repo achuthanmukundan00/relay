@@ -2,7 +2,7 @@ import type { AppConfig } from '../config.ts';
 import { GatewayError, jsonResponse } from '../errors.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
 import { streamHeaders } from '../normalize/stream.ts';
-import { normalizeTools } from '../normalize/tools.ts';
+import { normalizeOpenAIToolCalls, normalizeTools } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
 
 type JsonObject = Record<string, any>;
@@ -197,6 +197,8 @@ function normalizeChoice(choice: unknown): JsonObject {
   if (!isObject(choice)) return { index: 0, message: emptyAssistant(), finish_reason: 'stop', logprobs: null };
   const message = isObject(choice.message) ? { ...choice.message } : emptyAssistant();
   message.role = 'assistant';
+  const toolCalls = normalizeOpenAIToolCalls(message.tool_calls);
+  if (toolCalls) message.tool_calls = toolCalls;
   if (message.annotations === undefined) message.annotations = [];
   if (message.refusal === undefined) message.refusal = null;
   return {

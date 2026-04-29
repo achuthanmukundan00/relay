@@ -33,6 +33,96 @@ export function normalizeTools(body: JsonObject): void {
   delete body.function_call;
 }
 
+export function normalizeOpenAIToolCalls(toolCalls: unknown): JsonObject[] | undefined {
+  if (!Array.isArray(toolCalls)) return undefined;
+  return toolCalls.map((toolCall, index) => normalizeOpenAIToolCall(toolCall, index));
+}
+
+export function openAIMessageToAnthropicContent(message: JsonObject): JsonObject[] {
+  const content: JsonObject[] = [];
+  if (typeof message.content === 'string' && message.content.length > 0) {
+    content.push({ type: 'text', text: message.content });
+  }
+  const toolCalls = normalizeOpenAIToolCalls(message.tool_calls) ?? [];
+  for (const toolCall of toolCalls) {
+    content.push({
+      type: 'tool_use',
+      id: toolCall.id,
+      name: toolCall.function.name,
+      input: parseToolArguments(toolCall.function.arguments),
+    });
+  }
+  return content;
+}
+
+export function normalizeAnthropicTools(tools: unknown): JsonObject[] | undefined {
+  if (tools === undefined) return undefined;
+  if (!Array.isArray(tools)) throw new GatewayError(400, 'tools must be an array');
+  return tools.map((tool, index) => {
+    if (!isObject(tool) || typeof tool.name !== 'string') {
+      throw new GatewayError(400, `tools[${index}].name is required`);
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(tool.name)) {
+      throw new GatewayError(400, `tools[${index}].name is invalid for OpenAI function calling`);
+    }
+    return {
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: typeof tool.description === 'string' ? tool.description : undefined,
+        parameters: isObject(tool.input_schema) ? tool.input_schema : { type: 'object', properties: {} },
+      },
+    };
+  });
+}
+
+export function parseToolArguments(argumentsValue: unknown): JsonObject {
+  if (argumentsValue === undefined || argumentsValue === null || argumentsValue === '') return {};
+  if (typeof argumentsValue === 'string') {
+    try {
+      const parsed = JSON.parse(argumentsValue);
+      if (!isObject(parsed)) throw new Error('tool arguments must be an object');
+      return parsed;
+    } catch {
+      throw new GatewayError(502, 'Invalid tool call arguments from upstream', 'server_error');
+    }
+  }
+  if (isObject(argumentsValue)) return argumentsValue;
+  throw new GatewayError(502, 'Invalid tool call arguments from upstream', 'server_error');
+}
+
+function normalizeOpenAIToolCall(toolCall: unknown, index: number): JsonObject {
+  if (!isObject(toolCall)) {
+    throw new GatewayError(502, 'Invalid tool call from upstream', 'server_error');
+  }
+  const fn = isObject(toolCall.function) ? toolCall.function : {};
+  if (typeof fn.name !== 'string' || fn.name.length === 0) {
+    throw new GatewayError(502, 'Tool call from upstream is missing a function name', 'server_error');
+  }
+  return {
+    id: typeof toolCall.id === 'string' && toolCall.id.length > 0 ? toolCall.id : stableToolCallId(fn.name, index),
+    type: 'function',
+    function: {
+      name: fn.name,
+      arguments: normalizeToolArguments(fn.arguments),
+    },
+  };
+}
+
+function normalizeToolArguments(argumentsValue: unknown): string {
+  if (argumentsValue === undefined || argumentsValue === null || argumentsValue === '') return '{}';
+  if (typeof argumentsValue === 'string') {
+    parseToolArguments(argumentsValue);
+    return argumentsValue;
+  }
+  if (isObject(argumentsValue)) return JSON.stringify(argumentsValue);
+  throw new GatewayError(502, 'Invalid tool call arguments from upstream', 'server_error');
+}
+
+function stableToolCallId(name: string, index: number): string {
+  return `call_${name.replace(/[^A-Za-z0-9_-]/g, '_')}_${index}`;
+}
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
