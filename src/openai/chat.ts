@@ -1,7 +1,7 @@
 import type { AppConfig } from '../config.ts';
 import { GatewayError, jsonResponse } from '../errors.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
-import { streamHeaders } from '../normalize/stream.ts';
+import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
 import { normalizeOpenAIToolCalls, normalizeTools } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
 
@@ -166,7 +166,10 @@ async function streamChatCompletion(config: AppConfig, body: JsonObject): Promis
   if (!upstream.response.ok) {
     throw new GatewayError(502, 'Upstream llama server is unavailable', 'server_error');
   }
-  return new Response(upstream.response.body, {
+  if (!upstream.response.body) {
+    throw new GatewayError(502, 'Upstream returned an empty stream', 'server_error');
+  }
+  return new Response(ensureOpenAIStreamDone(upstream.response.body), {
     status: 200,
     headers: streamHeaders(),
   });

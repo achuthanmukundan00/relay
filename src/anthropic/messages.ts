@@ -1,6 +1,6 @@
 import type { AppConfig } from '../config.ts';
 import { GatewayError, jsonResponse } from '../errors.ts';
-import { streamHeaders } from '../normalize/stream.ts';
+import { encodeSSE, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
 
@@ -208,12 +208,13 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
   const messageId = `msg_${crypto.randomUUID()}`;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      controller.enqueue(encoder.encode(sse('message_start', {
+      controller.enqueue(encoder.encode(encodeSSE({ event: 'message_start', data: {
         type: 'message_start',
         message: { id: messageId, type: 'message', role: 'assistant', content: [], model: chatRequest.model },
-      })));
+      } })));
       let buffer = '';
       let textStarted = false;
+      let toolStarted = false;
       let stopReason = 'end_turn';
       const reader = upstream.response.body!.getReader();
       while (true) {
@@ -233,30 +234,48 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
           if (typeof content === 'string') {
             if (!textStarted) {
               textStarted = true;
-              controller.enqueue(encoder.encode(sse('content_block_start', {
+              controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_start', data: {
                 type: 'content_block_start',
                 index: 0,
                 content_block: { type: 'text', text: '' },
-              })));
+              } })));
             }
-            controller.enqueue(encoder.encode(sse('content_block_delta', {
+            controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_delta', data: {
               type: 'content_block_delta',
               index: 0,
               delta: { type: 'text_delta', text: content },
-            })));
+            } })));
+          }
+          for (const toolCall of choice?.delta?.tool_calls ?? []) {
+            const fn = toolCall.function ?? {};
+            if (!toolStarted && toolCall.id && fn.name) {
+              toolStarted = true;
+              controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_start', data: {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'tool_use', id: toolCall.id, name: fn.name, input: {} },
+              } })));
+            }
+            if (typeof fn.arguments === 'string' && fn.arguments.length > 0) {
+              controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_delta', data: {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'input_json_delta', partial_json: fn.arguments },
+              } })));
+            }
           }
           if (choice?.finish_reason) stopReason = mapStopReason(choice.finish_reason);
         }
       }
-      if (textStarted) {
-        controller.enqueue(encoder.encode(sse('content_block_stop', { type: 'content_block_stop', index: 0 })));
+      if (textStarted || toolStarted) {
+        controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } })));
       }
-      controller.enqueue(encoder.encode(sse('message_delta', {
+      controller.enqueue(encoder.encode(encodeSSE({ event: 'message_delta', data: {
         type: 'message_delta',
         delta: { stop_reason: stopReason, stop_sequence: null },
         usage: {},
-      })));
-      controller.enqueue(encoder.encode(sse('message_stop', { type: 'message_stop' })));
+      } })));
+      controller.enqueue(encoder.encode(encodeSSE({ event: 'message_stop', data: { type: 'message_stop' } })));
       controller.close();
     },
   });
@@ -285,10 +304,6 @@ function anthropicType(status: number, type: string): string {
   if (status === 401) return 'authentication_error';
   if (status >= 500) return 'api_error';
   return type === 'authentication_error' ? type : 'invalid_request_error';
-}
-
-function sse(event: string, data: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
 function isObject(value: unknown): value is JsonObject {
