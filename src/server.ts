@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 
 import type { AppConfig } from './config.ts';
 import { errorResponse, GatewayError, jsonResponse, openAIError } from './errors.ts';
+import { handleAnthropicMessages } from './anthropic/messages.ts';
 import { createChatCompletion, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
 import { handleModels } from './openai/models.ts';
 import { createResponse, deleteResponse, getResponse, ResponseStore } from './openai/responses.ts';
@@ -44,6 +45,9 @@ export function createApp(config: AppConfig): App {
       }
       if (path === '/v1/responses' && request.method === 'POST') {
         return await createResponse(config, responseStore, await readJson(request));
+      }
+      if (path === '/v1/messages' && request.method === 'POST') {
+        return await handleAnthropicMessages(config, request);
       }
       const responseMatch = path.match(/^\/v1\/responses\/([^/]+)$/);
       if (responseMatch) {
