@@ -4,6 +4,7 @@ import type { AppConfig } from './config.ts';
 import { errorResponse, GatewayError, jsonResponse, openAIError } from './errors.ts';
 import { createChatCompletion, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
 import { handleModels } from './openai/models.ts';
+import { createResponse, deleteResponse, getResponse, ResponseStore } from './openai/responses.ts';
 import { createLogger } from './logger.ts';
 
 type AppFetchInit = Omit<RequestInit, 'body'> & { body?: unknown };
@@ -17,6 +18,7 @@ export type App = {
 export function createApp(config: AppConfig): App {
   const logger = createLogger(config.logLevel);
   const store = new CompletionStore();
+  const responseStore = new ResponseStore();
 
   async function handler(request: Request): Promise<Response> {
     try {
@@ -39,6 +41,15 @@ export function createApp(config: AppConfig): App {
         if (request.method === 'GET') {
           return listStoredCompletions(store, url);
         }
+      }
+      if (path === '/v1/responses' && request.method === 'POST') {
+        return await createResponse(config, responseStore, await readJson(request));
+      }
+      const responseMatch = path.match(/^\/v1\/responses\/([^/]+)$/);
+      if (responseMatch) {
+        const id = decodeURIComponent(responseMatch[1]);
+        if (request.method === 'GET') return getResponse(responseStore, id);
+        if (request.method === 'DELETE') return deleteResponse(responseStore, id);
       }
       const messageMatch = path.match(/^\/v1\/chat\/completions\/([^/]+)\/messages$/);
       if (request.method === 'GET' && messageMatch) {
