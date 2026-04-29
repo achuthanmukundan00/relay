@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
+import { hasValidApiKey } from './auth.ts';
 import type { AppConfig } from './config.ts';
 import { errorResponse, GatewayError, jsonResponse, openAIError } from './errors.ts';
 import { handleAnthropicMessages } from './anthropic/messages.ts';
@@ -126,8 +127,17 @@ export function createApp(config: AppConfig): App {
     },
     async listen() {
       const server = createServer(async (req, res) => {
-        const response = await handler(await nodeRequestToWebRequest(req, config));
-        await writeWebResponse(res, response);
+        const requestId = nodeHeaderValue(req.headers['x-request-id']) ?? crypto.randomUUID();
+        try {
+          const response = await handler(await nodeRequestToWebRequest(req, config));
+          await writeWebResponse(res, response);
+        } catch (error) {
+          logger.error('request failed', {
+            request_id: requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await writeWebResponse(res, withRequestId(errorResponse(error), requestId));
+        }
       });
       await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
       const url = `http://${config.host}:${config.port}`;
@@ -161,7 +171,7 @@ function authorizeOpenAI(config: AppConfig, request: Request, path: string): Res
   if (!config.apiKey || !path.startsWith('/v1/')) return undefined;
   const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
   const xKey = request.headers.get('x-api-key');
-  if (bearer === config.apiKey || xKey === config.apiKey) return undefined;
+  if (hasValidApiKey(config.apiKey, bearer, xKey)) return undefined;
   return openAIError(401, 'Unauthorized', 'authentication_error');
 }
 
@@ -175,13 +185,37 @@ async function readJson(request: Request): Promise<unknown> {
 
 async function nodeRequestToWebRequest(req: IncomingMessage, config: AppConfig): Promise<Request> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  let totalBytes = contentLength(req);
+  if (totalBytes !== undefined && totalBytes > config.maxRequestBodyBytes) {
+    throw new GatewayError(413, 'Request body too large');
+  }
+  totalBytes = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.from(chunk);
+    totalBytes += buffer.byteLength;
+    if (totalBytes > config.maxRequestBodyBytes) {
+      throw new GatewayError(413, 'Request body too large');
+    }
+    chunks.push(buffer);
+  }
   const body = chunks.length > 0 ? Buffer.concat(chunks) : undefined;
   return new Request(`http://${config.host}:${config.port}${req.url ?? '/'}`, {
     method: req.method,
     headers: req.headers as HeadersInit,
     body,
   });
+}
+
+function contentLength(req: IncomingMessage): number | undefined {
+  const value = nodeHeaderValue(req.headers['content-length']);
+  if (!value) return undefined;
+  const length = Number.parseInt(value, 10);
+  return Number.isFinite(length) && length >= 0 ? length : undefined;
+}
+
+function nodeHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0];
+  return value;
 }
 
 async function writeWebResponse(res: ServerResponse, response: Response) {

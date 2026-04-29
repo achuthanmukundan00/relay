@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import test from 'node:test';
 
 import type { AppConfig } from '../src/config.ts';
@@ -71,6 +73,44 @@ test('error logs include request ids without leaking API keys or prompts', async
   }
 });
 
+test('oversized HTTP request bodies are rejected before upstream handling', async () => {
+  const app = createApp({
+    ...testConfig('http://127.0.0.1:9'),
+    port: await freePort(),
+    maxRequestBodyBytes: 16,
+    logLevel: 'silent',
+  });
+  const server = await app.listen();
+  try {
+    const response = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'req_too_large',
+      },
+      body: JSON.stringify({ prompt: 'this request is too large' }),
+    });
+
+    assert.equal(response.status, 413);
+    assert.equal(response.headers.get('x-request-id'), 'req_too_large');
+    assert.equal((await response.json()).error.type, 'invalid_request_error');
+  } finally {
+    await server.close();
+  }
+});
+
+async function freePort(): Promise<number> {
+  const server = createServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('unexpected server address');
+  const { port } = address;
+  server.close();
+  await once(server, 'close');
+  return port;
+}
+
 function testConfig(upstreamBaseUrl: string): AppConfig {
   return {
     port: 8080,
@@ -79,5 +119,6 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     requestTimeoutMs: 50,
     logLevel: 'info',
     completionTtlMs: 3_600_000,
+    maxRequestBodyBytes: 1_048_576,
   };
 }

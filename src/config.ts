@@ -8,6 +8,7 @@ export type AppConfig = {
   apiKey?: string;
   completionTtlMs: number;
   upstreamVisionOk?: boolean;
+  maxRequestBodyBytes: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -21,6 +22,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     apiKey: readOptional(env.API_KEY),
     completionTtlMs: readInteger(env.COMPLETION_TTL_SECONDS, 3600, 'COMPLETION_TTL_SECONDS') * 1000,
     upstreamVisionOk: env.UPSTREAM_VISION_OK === 'true',
+    maxRequestBodyBytes: readInteger(env.MAX_REQUEST_BODY_BYTES, 1_048_576, 'MAX_REQUEST_BODY_BYTES'),
   };
 }
 

@@ -13,6 +13,7 @@ test('loads spec defaults', () => {
   assert.equal(config.requestTimeoutMs, 600_000);
   assert.equal(config.logLevel, 'info');
   assert.equal(config.apiKey, undefined);
+  assert.equal(config.maxRequestBodyBytes, 1_048_576);
 });
 
 test('loads overrides from environment', () => {
@@ -24,6 +25,7 @@ test('loads overrides from environment', () => {
     REQUEST_TIMEOUT_SECONDS: '12',
     LOG_LEVEL: 'debug',
     API_KEY: 'secret',
+    MAX_REQUEST_BODY_BYTES: '4096',
   });
 
   assert.equal(config.port, 9090);
@@ -33,4 +35,5 @@ test('loads overrides from environment', () => {
   assert.equal(config.requestTimeoutMs, 12_000);
   assert.equal(config.logLevel, 'debug');
   assert.equal(config.apiKey, 'secret');
+  assert.equal(config.maxRequestBodyBytes, 4096);
 });

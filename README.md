@@ -179,6 +179,7 @@ Relay accepts `x-api-key` and `Authorization: Bearer ...`; it does not require a
 
 - If `API_KEY` is unset, Relay allows unauthenticated local use.
 - If `API_KEY` is set, requests must include `Authorization: Bearer <key>` or `x-api-key: <key>`.
+- HTTP request bodies are capped by `MAX_REQUEST_BODY_BYTES` and default to 1 MiB.
 - Logs include request IDs and sanitized errors, not full prompts or API keys.
 - Keep `HOST=127.0.0.1` for local-only use. Set `HOST=0.0.0.0` only when you intentionally want LAN or container exposure.
 - Relay is intended for trusted local networks. Put a real reverse proxy and TLS in front of it before exposing it beyond your machine.

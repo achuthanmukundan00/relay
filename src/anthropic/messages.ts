@@ -1,3 +1,4 @@
+import { hasValidApiKey } from '../auth.ts';
 import type { AppConfig } from '../config.ts';
 import { GatewayError, jsonResponse } from '../errors.ts';
 import { encodeSSE, streamHeaders } from '../normalize/stream.ts';
@@ -27,7 +28,7 @@ function authorizeAnthropic(config: AppConfig, request: Request): void {
   if (!config.apiKey) return;
   const xKey = request.headers.get('x-api-key');
   const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (xKey === config.apiKey || bearer === config.apiKey) return;
+  if (hasValidApiKey(config.apiKey, xKey, bearer)) return;
   throw new GatewayError(401, 'Unauthorized', 'authentication_error');
 }
 

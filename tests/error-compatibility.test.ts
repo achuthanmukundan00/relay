@@ -65,5 +65,6 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     requestTimeoutMs: 50,
     logLevel: 'silent',
     completionTtlMs: 3_600_000,
+    maxRequestBodyBytes: 1_048_576,
   };
 }
