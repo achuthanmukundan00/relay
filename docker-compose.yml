@@ -1,0 +1,17 @@
+services:
+  gateway:
+    build: .
+    image: relay-gateway:local
+    environment:
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-8080}
+      - UPSTREAM_BASE_URL=${UPSTREAM_BASE_URL:-http://host.docker.internal:1234}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-}
+      - REQUEST_TIMEOUT_SECONDS=${REQUEST_TIMEOUT_SECONDS:-600}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - API_KEY=${API_KEY:-}
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
