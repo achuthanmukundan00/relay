@@ -28,6 +28,12 @@ export function createApp(config: AppConfig): App {
       if (request.method === 'GET' && path === '/health') {
         return jsonResponse({ ok: true });
       }
+      if (path === '/v1/messages') {
+        if (request.method === 'POST') return await handleAnthropicMessages(config, request);
+        return jsonResponse({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, 404);
+      }
+      const authError = authorizeOpenAI(config, request, path);
+      if (authError) return authError;
       if (request.method === 'GET' && path === '/v1/models') {
         return await handleModels(config);
       }
@@ -45,9 +51,6 @@ export function createApp(config: AppConfig): App {
       }
       if (path === '/v1/responses' && request.method === 'POST') {
         return await createResponse(config, responseStore, await readJson(request));
-      }
-      if (path === '/v1/messages' && request.method === 'POST') {
-        return await handleAnthropicMessages(config, request);
       }
       const responseMatch = path.match(/^\/v1\/responses\/([^/]+)$/);
       if (responseMatch) {
@@ -103,6 +106,14 @@ export function createApp(config: AppConfig): App {
       };
     },
   };
+}
+
+function authorizeOpenAI(config: AppConfig, request: Request, path: string): Response | undefined {
+  if (!config.apiKey || !path.startsWith('/v1/')) return undefined;
+  const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const xKey = request.headers.get('x-api-key');
+  if (bearer === config.apiKey || xKey === config.apiKey) return undefined;
+  return openAIError(401, 'Unauthorized', 'authentication_error');
 }
 
 async function readJson(request: Request): Promise<unknown> {
