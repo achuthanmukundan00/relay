@@ -68,6 +68,100 @@ test('POST /v1/responses accepts message-array input and tools', async () => {
   });
 });
 
+test('POST /v1/responses accepts Responses SDK function tool shape', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (_req, res, body) => {
+      assert.equal((body as any).tool_choice, 'auto');
+      assert.equal((body as any).tools[0].type, 'function');
+      assert.equal((body as any).tools[0].function.name, 'lookup');
+      assert.deepEqual((body as any).tools[0].function.parameters, {
+        type: 'object',
+        properties: { q: { type: 'string' } },
+        required: ['q'],
+      });
+      sendJson(res, 200, {
+        id: 'chatcmpl-response',
+        object: 'chat.completion',
+        created: 1,
+        model: 'llama',
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'lookup', arguments: '{"ok":true}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+          logprobs: null,
+        }],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      });
+    };
+
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/responses', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        input: 'Use the tool',
+        tools: [{
+          type: 'function',
+          name: 'lookup',
+          description: 'Lookup',
+          parameters: {
+            type: 'object',
+            properties: { q: { type: 'string' } },
+            required: ['q'],
+          },
+        }],
+        tool_choice: 'auto',
+        store: false,
+      },
+    });
+
+    const text = await res.text();
+    assert.equal(res.status, 200, text);
+    const body = JSON.parse(text);
+    assert.equal(body.output[0].content[0].type, 'function_call');
+    assert.equal(body.output[0].content[0].name, 'lookup');
+  });
+});
+
+test('POST /v1/responses accepts Responses SDK function tool_choice shape', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (_req, res, body) => {
+      assert.deepEqual((body as any).tool_choice, {
+        type: 'function',
+        function: { name: 'lookup' },
+      });
+      sendJson(res, 200, chatCompletion('llama', 'ok'));
+    };
+
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/responses', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        input: 'Use the tool',
+        tools: [{
+          type: 'function',
+          name: 'lookup',
+          parameters: {
+            type: 'object',
+            properties: { q: { type: 'string' } },
+          },
+        }],
+        tool_choice: { type: 'function', name: 'lookup' },
+        store: false,
+      },
+    });
+
+    assert.equal(res.status, 200, await res.text());
+  });
+});
+
 test('POST /v1/responses normalizes response-style input content parts and metadata', async () => {
   await withUpstream(async (upstream) => {
     upstream.handler = async (_req, res, body) => {

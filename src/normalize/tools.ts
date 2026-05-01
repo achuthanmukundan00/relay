@@ -11,6 +11,7 @@ export function normalizeTools(body: JsonObject): void {
   }
 
   if (Array.isArray(body.tools)) {
+    body.tools = body.tools.map(normalizeFunctionToolDefinition);
     body.tools.forEach(validateFunctionTool);
   }
 
@@ -33,6 +34,21 @@ export function normalizeTools(body: JsonObject): void {
   delete body.function_call;
 }
 
+function normalizeFunctionToolDefinition(tool: unknown): unknown {
+  if (!isObject(tool)) return tool;
+  if (tool.type !== 'function' || isObject(tool.function)) return tool;
+  if (typeof tool.name !== 'string' || tool.name.length === 0) return tool;
+  return {
+    ...tool,
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  };
+}
+
 function validateFunctionTool(tool: unknown, index: number): void {
   if (!isObject(tool)) {
     throw new GatewayError(400, `tools[${index}] must be an object`);
@@ -52,6 +68,9 @@ function normalizeToolChoice(toolChoice: unknown): unknown {
   if (toolChoice === 'auto' || toolChoice === 'none' || toolChoice === 'required') return toolChoice;
   if (isObject(toolChoice) && toolChoice.type === 'function' && isObject(toolChoice.function) && typeof toolChoice.function.name === 'string') {
     return toolChoice;
+  }
+  if (isObject(toolChoice) && toolChoice.type === 'function' && typeof toolChoice.name === 'string') {
+    return { type: 'function', function: { name: toolChoice.name } };
   }
   if (isObject(toolChoice) && toolChoice.type === 'tool' && typeof toolChoice.name === 'string') {
     return { type: 'function', function: { name: toolChoice.name } };
