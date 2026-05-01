@@ -34,7 +34,9 @@ test('POST /v1/responses maps string input to chat completion and stores respons
     const response = JSON.parse(text);
     assert.equal(response.object, 'response');
     assert.equal(response.status, 'completed');
+    assert.equal(response.output[0].status, 'completed');
     assert.deepEqual(response.output[0].content[0], { type: 'output_text', text: 'hi' });
+    assert.deepEqual(response.usage, { input_tokens: 2, output_tokens: 1, total_tokens: 3 });
 
     const get = await app.fetch(`/v1/responses/${response.id}`);
     assert.equal(get.status, 200);
@@ -46,21 +48,100 @@ test('POST /v1/responses accepts message-array input and tools', async () => {
   await withUpstream(async (upstream) => {
     upstream.handler = async (_req, res, body) => {
       assert.equal((body as any).tool_choice, 'auto');
+      assert.equal((body as any).parallel_tool_calls, false);
       assert.equal((body as any).tools[0].function.name, 'lookup');
       assert.deepEqual((body as any).messages, [{ role: 'user', content: 'hello' }]);
       sendJson(res, 200, chatCompletion('llama', 'ok'));
     };
-    const res = await createApp(testConfig(upstream.url)).fetch('/v1/responses', {
+    const res = await createApp({ ...testConfig(upstream.url), upstreamVisionOk: true }).fetch('/v1/responses', {
       method: 'POST',
       body: {
         model: 'llama',
         input: [{ role: 'user', content: 'hello' }],
         tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }],
         tool_choice: 'auto',
+        parallel_tool_calls: false,
       },
     });
 
     assert.equal(res.status, 200);
+  });
+});
+
+test('POST /v1/responses normalizes response-style input content parts and metadata', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (_req, res, body) => {
+      assert.deepEqual((body as any).messages, [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'hello' },
+            { type: 'image_url', image_url: { url: 'https://example.test/cat.png' } },
+          ],
+        },
+      ]);
+      assert.deepEqual((body as any).response_format, { type: 'json_object' });
+      sendJson(res, 200, chatCompletion('llama', 'ok'));
+    };
+    const res = await createApp({ ...testConfig(upstream.url), upstreamVisionOk: true }).fetch('/v1/responses', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        metadata: { source: 'test' },
+        response_format: { type: 'json_object' },
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'hello' },
+            { type: 'input_image', image_url: 'https://example.test/cat.png' },
+          ],
+        }],
+      },
+    });
+
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.metadata, { source: 'test' });
+  });
+});
+
+test('POST /v1/responses with store false does not persist the response', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => sendJson(res, 200, chatCompletion('llama', 'no-store'));
+    const app = createApp(testConfig(upstream.url));
+    const create = await app.fetch('/v1/responses', {
+      method: 'POST',
+      body: { model: 'llama', input: 'hello', store: false },
+    });
+    const body = await create.json();
+
+    const missing = await app.fetch(`/v1/responses/${body.id}`);
+    assert.equal(missing.status, 404);
+  });
+});
+
+test('POST /v1/responses validates previous_response_id against stored responses', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => sendJson(res, 200, chatCompletion('llama', 'hi'));
+    const app = createApp(testConfig(upstream.url));
+    const first = await app.fetch('/v1/responses', {
+      method: 'POST',
+      body: { model: 'llama', input: 'hello', store: true },
+    });
+    const previous = await first.json();
+
+    const followup = await app.fetch('/v1/responses', {
+      method: 'POST',
+      body: { model: 'llama', input: 'again', previous_response_id: previous.id },
+    });
+    assert.equal(followup.status, 200);
+    assert.equal((await followup.json()).previous_response_id, previous.id);
+
+    const missing = await app.fetch('/v1/responses', {
+      method: 'POST',
+      body: { model: 'llama', input: 'again', previous_response_id: 'resp_missing' },
+    });
+    assert.equal(missing.status, 404);
   });
 });
 
@@ -174,6 +255,22 @@ test('Responses hosted-only fields strip permissively and reject in strict compa
     assert.equal(body.error.type, 'unsupported_capability');
     assert.equal(body.error.code, 'unsupported_capability');
   });
+});
+
+test('Responses hosted tools are rejected explicitly', async () => {
+  const res = await createApp(testConfig('http://127.0.0.1:9')).fetch('/v1/responses', {
+    method: 'POST',
+    body: {
+      model: 'llama',
+      input: 'hello',
+      tools: [{ type: 'web_search' }],
+    },
+  });
+
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.error.type, 'unsupported_capability');
+  assert.equal(body.error.code, 'unsupported_capability');
 });
 
 function testConfig(upstreamBaseUrl: string): AppConfig {

@@ -4,6 +4,7 @@ import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
 import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
 import { normalizeOpenAIToolCalls, normalizeTools } from '../normalize/tools.ts';
+import { normalizeOpenAIResponseFormat } from './response-format.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
 
 type JsonObject = Record<string, any>;
@@ -189,23 +190,8 @@ function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: Jso
   applySamplingDefaults(body, config.samplingDefaults);
   body.messages = normalizeMessages(body.messages, config);
   normalizeTools(body);
-  normalizeResponseFormat(body, config);
+  normalizeOpenAIResponseFormat(body, config);
   return { body, strippedFields };
-}
-
-function normalizeResponseFormat(body: JsonObject, config: AppConfig): void {
-  if (body.response_format === undefined) return;
-  if (!isObject(body.response_format) || typeof body.response_format.type !== 'string') {
-    throw new GatewayError(400, 'response_format.type is required', 'invalid_request_error', 'invalid_request');
-  }
-  if (body.response_format.type === 'text' || body.response_format.type === 'json_object') return;
-  if (body.response_format.type === 'json_schema') {
-    if (config.strictCompat) {
-      throw unsupportedCapabilityError('response_format json_schema support is unknown for this upstream');
-    }
-    return;
-  }
-  throw invalidRequestError('response_format.type is not supported', 'unsupported_parameter', 'response_format');
 }
 
 function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {
