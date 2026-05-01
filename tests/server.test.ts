@@ -56,9 +56,25 @@ test('GET /v1/models passes through upstream model list', async () => {
 
 test('capability endpoints expose and refresh upstream model state', async () => {
   await withUpstream(async (upstream) => {
-    upstream.handler = (req, res) => {
-      assert.equal(req.url, '/v1/models');
-      sendJson(res, 200, { object: 'list', data: [{ id: 'llama', object: 'model' }] });
+    upstream.handler = (req, res, body) => {
+      if (req.url === '/health') {
+        sendJson(res, 200, { status: 'ok' });
+        return;
+      }
+      if (req.url === '/v1/models') {
+        sendJson(res, 200, { object: 'list', data: [{ id: 'llama', object: 'model' }] });
+        return;
+      }
+      if (req.url === '/v1/chat/completions') {
+        assert.equal((body as any).max_tokens, 1);
+        sendJson(res, 200, upstreamChat('llama', 'ok'));
+        return;
+      }
+      if (req.url === '/tokenize') {
+        sendJson(res, 200, { tokens: [1, 2] });
+        return;
+      }
+      assert.fail(`unexpected upstream path ${req.url}`);
     };
     const app = createApp(testConfig(upstream.url));
 
@@ -70,10 +86,14 @@ test('capability endpoints expose and refresh upstream model state', async () =>
     assert.equal(refreshed.status, 200);
     const body = await refreshed.json();
     assert.equal(body.upstream.reachable, true);
-    assert.equal(body.models.list, 'supported');
+    assert.equal(body.upstream.health, 'available');
+    assert.equal(body.models.list, 'available');
     assert.equal(body.models.currentModel, 'llama');
-    assert.equal(body.endpoints.chatCompletions, 'supported');
-    assert.equal(body.features.multimodalInput, 'unsupported');
+    assert.equal(body.endpoints.chatCompletions, 'implemented');
+    assert.equal(body.endpoints.embeddings, 'unsupported');
+    assert.equal(body.features.chatCompletions, 'available');
+    assert.equal(body.features.tokenization, 'available');
+    assert.equal(body.features.multimodalInput, 'unknown');
   });
 });
 
@@ -84,7 +104,31 @@ test('capability refresh marks upstream offline without failing Relay', async ()
   assert.equal(refreshed.status, 200);
   const body = await refreshed.json();
   assert.equal(body.upstream.reachable, false);
-  assert.equal(body.models.list, 'unsupported');
+  assert.equal(body.models.list, 'unknown');
+  assert.equal(body.endpoints.responses, 'implemented');
+  assert.equal(body.endpoints.rerank, 'unsupported');
+  assert.equal(body.features.chatCompletions, 'unknown');
+});
+
+test('capability refresh does not overclaim when upstream only serves models', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (req, res) => {
+      if (req.url === '/v1/models') {
+        sendJson(res, 200, { object: 'list', data: [{ id: 'llama', object: 'model' }] });
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'missing' }));
+    };
+    const app = createApp(testConfig(upstream.url));
+
+    const refreshed = await app.fetch('/relay/capabilities/refresh', { method: 'POST' });
+    const body = await refreshed.json();
+    assert.equal(body.upstream.reachable, true);
+    assert.equal(body.models.list, 'available');
+    assert.equal(body.features.chatCompletions, 'unsupported');
+    assert.equal(body.features.tokenization, 'unsupported');
+  });
 });
 
 test('strict startup fails when upstream is offline', async () => {

@@ -1,18 +1,38 @@
 import type { AppConfig } from './config.ts';
 
-export type RelayCapabilityStatus = 'supported' | 'unsupported' | 'unknown';
+export type RelayCapabilityStatus = 'implemented' | 'available' | 'unsupported' | 'unknown';
 
 export type RelayCapabilities = {
   upstream: {
     baseUrl: string;
     reachable: boolean;
+    health: RelayCapabilityStatus;
   };
   models: {
     list: RelayCapabilityStatus;
     currentModel?: string;
   };
-  endpoints: Record<string, RelayCapabilityStatus>;
-  features: Record<string, RelayCapabilityStatus>;
+  endpoints: {
+    chatCompletions: RelayCapabilityStatus;
+    completions: RelayCapabilityStatus;
+    responses: RelayCapabilityStatus;
+    embeddings: RelayCapabilityStatus;
+    anthropicMessages: RelayCapabilityStatus;
+    tokenCounting: RelayCapabilityStatus;
+    rerank: RelayCapabilityStatus;
+  };
+  features: {
+    chatCompletions: RelayCapabilityStatus;
+    tokenization: RelayCapabilityStatus;
+    streaming: RelayCapabilityStatus;
+    tools: RelayCapabilityStatus;
+    parallelToolCalls: RelayCapabilityStatus;
+    jsonSchema: RelayCapabilityStatus;
+    responseFormat: RelayCapabilityStatus;
+    multimodalInput: RelayCapabilityStatus;
+    reasoningContent: RelayCapabilityStatus;
+    logprobs: RelayCapabilityStatus;
+  };
   checkedAt: string;
 };
 
@@ -31,28 +51,65 @@ export class CapabilityRegistry {
 
   async refresh(): Promise<RelayCapabilities> {
     const next = initialCapabilities(this.config);
+    const modelProbe = await this.probe('/v1/models', { headers: { accept: 'application/json' } });
+    if (modelProbe.reachable) next.upstream.reachable = true;
+    next.upstream.health = await this.probeHealth();
+    if (modelProbe.response?.ok) {
+      next.models.list = 'available';
+      const body = await modelProbe.response.json().catch(() => undefined);
+      const firstModel = Array.isArray(body?.data) ? body.data.find((item: unknown) => isObject(item) && typeof item.id === 'string') : undefined;
+      if (isObject(firstModel)) next.models.currentModel = firstModel.id;
+    }
+
+    const chatProbe = await this.probe('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        model: next.models.currentModel ?? this.config.defaultModel ?? 'local',
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1,
+      }),
+    });
+    if (chatProbe.reachable) next.upstream.reachable = true;
+    next.features.chatCompletions = statusFromProbe(chatProbe);
+    next.features.streaming = chatProbe.response?.ok ? 'available' : 'unknown';
+
+    const tokenizeProbe = await this.probe('/tokenize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ content: 'ping' }),
+    });
+    if (tokenizeProbe.reachable) next.upstream.reachable = true;
+    next.features.tokenization = statusFromProbe(tokenizeProbe);
+
+    this.capabilities = next;
+    return this.get();
+  }
+
+  private async probe(path: string, init: RequestInit): Promise<{ response?: Response; reachable: boolean }> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.probeTimeoutMs ?? 3000);
     try {
-      const response = await fetch(upstreamUrl(this.config.upstreamBaseUrl, '/v1/models'), {
-        headers: { accept: 'application/json' },
+      const response = await fetch(upstreamUrl(this.config.upstreamBaseUrl, path), {
+        ...init,
         signal: controller.signal,
       });
-      next.upstream.reachable = response.ok;
-      next.models.list = response.ok ? 'supported' : 'unsupported';
-      if (response.ok) {
-        const body = await response.json().catch(() => undefined);
-        const firstModel = Array.isArray(body?.data) ? body.data.find((item: unknown) => isObject(item) && typeof item.id === 'string') : undefined;
-        if (isObject(firstModel)) next.models.currentModel = firstModel.id;
-      }
+      return {
+        response,
+        reachable: response.ok || response.status !== 404,
+      };
     } catch {
-      next.upstream.reachable = false;
-      next.models.list = 'unsupported';
+      return { reachable: false };
     } finally {
       clearTimeout(timeout);
     }
-    this.capabilities = next;
-    return this.get();
+  }
+
+  private async probeHealth(): Promise<RelayCapabilityStatus> {
+    const probe = await this.probe('/health', { headers: { accept: 'application/json' } });
+    if (probe.reachable && probe.response?.ok) return 'available';
+    if (probe.response?.status === 404) return 'unknown';
+    return probe.reachable ? 'unknown' : 'unknown';
   }
 }
 
@@ -61,35 +118,41 @@ function initialCapabilities(config: AppConfig): RelayCapabilities {
     upstream: {
       baseUrl: config.upstreamBaseUrl,
       reachable: false,
+      health: 'unknown',
     },
     models: {
       list: 'unknown',
       currentModel: config.defaultModel,
     },
     endpoints: {
-      chatCompletions: 'supported',
-      completions: 'supported',
-      responses: 'supported',
-      embeddings: 'unknown',
-      anthropicMessages: 'supported',
-      tokenCounting: 'unknown',
-      rerank: 'unknown',
-      tokenize: 'unknown',
-      detokenize: 'unknown',
-      metrics: 'unknown',
+      chatCompletions: 'implemented',
+      completions: 'implemented',
+      responses: 'implemented',
+      embeddings: 'unsupported',
+      anthropicMessages: 'implemented',
+      tokenCounting: 'implemented',
+      rerank: 'unsupported',
     },
     features: {
-      streaming: 'supported',
+      chatCompletions: 'unknown',
+      tokenization: 'unknown',
+      streaming: 'unknown',
       tools: 'unknown',
       parallelToolCalls: 'unknown',
       jsonSchema: 'unknown',
       responseFormat: 'unknown',
-      multimodalInput: 'unsupported',
+      multimodalInput: 'unknown',
       reasoningContent: 'unknown',
       logprobs: 'unknown',
     },
     checkedAt: new Date().toISOString(),
   };
+}
+
+function statusFromProbe(probe: { response?: Response }): RelayCapabilityStatus {
+  if (probe.response?.ok) return 'available';
+  if (probe.response && (probe.response.status === 404 || probe.response.status === 501)) return 'unsupported';
+  return 'unknown';
 }
 
 function upstreamUrl(baseUrl: string, path: string): string {
