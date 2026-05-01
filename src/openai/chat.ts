@@ -192,9 +192,23 @@ function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: Jso
   applySamplingDefaults(body, config.samplingDefaults);
   body.messages = normalizeMessages(body.messages, config);
   normalizeTools(body);
-  // llama.cpp accepts OpenAI JSON-mode fields on recent builds. Strict json_schema
-  // enforcement is not claimed here; the gateway passes the request through as-is.
+  normalizeResponseFormat(body, config);
   return { body, strippedFields };
+}
+
+function normalizeResponseFormat(body: JsonObject, config: AppConfig): void {
+  if (body.response_format === undefined) return;
+  if (!isObject(body.response_format) || typeof body.response_format.type !== 'string') {
+    throw new GatewayError(400, 'response_format.type is required', 'invalid_request_error', 'invalid_request');
+  }
+  if (body.response_format.type === 'text' || body.response_format.type === 'json_object') return;
+  if (body.response_format.type === 'json_schema') {
+    if (config.strictCompat) {
+      throw new GatewayError(400, 'response_format json_schema support is unknown for this upstream', 'unsupported_capability', 'unsupported_capability');
+    }
+    return;
+  }
+  throw new GatewayError(400, 'response_format.type is not supported', 'invalid_request_error', 'unsupported_parameter');
 }
 
 function withFieldWarning(response: Response, strippedFields: string[], config: AppConfig): Response {
@@ -279,11 +293,10 @@ function validateAssistantChoice(choice: JsonObject): void {
 
 function normalizeFinishReason(reason: unknown): string | null {
   if (reason === null || reason === undefined) return null;
-  if (['stop', 'length', 'tool_calls', 'function_call', 'content_filter'].includes(String(reason))) {
-    return String(reason);
-  }
+  if (reason === 'function_call') return 'tool_calls';
+  if (['stop', 'length', 'tool_calls', 'content_filter'].includes(String(reason))) return String(reason);
   if (String(reason).includes('tool')) return 'tool_calls';
-  if (String(reason).includes('length')) return 'length';
+  if (String(reason).includes('length') || String(reason).includes('max_tokens')) return 'length';
   return 'stop';
 }
 

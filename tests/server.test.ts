@@ -148,9 +148,14 @@ test('POST /v1/chat/completions returns OpenAI-compatible non-streaming completi
 
     assert.equal(res.status, 200);
     const json = await res.json();
+    assert.equal(typeof json.id, 'string');
     assert.equal(json.object, 'chat.completion');
+    assert.equal(typeof json.created, 'number');
+    assert.equal(json.model, 'llama');
+    assert.ok(Array.isArray(json.choices));
     assert.equal(json.choices[0].message.role, 'assistant');
     assert.equal(json.choices[0].message.content, 'hi there');
+    assert.deepEqual(json.usage, { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
   });
 });
 
@@ -249,14 +254,41 @@ test('normalizes chat requests for agent compatibility', async (t) => {
       assertBody: (body) => assert.deepEqual(body.messages[0], { role: 'system', content: 'rules' }),
     },
     {
+      name: 'string content passes through',
+      patch: { messages: [{ role: 'user', content: 'plain text' }] },
+      assertBody: (body) => assert.equal(body.messages[0].content, 'plain text'),
+    },
+    {
+      name: 'text content parts become upstream text',
+      patch: { messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }, { type: 'text', text: 'world' }] }] },
+      assertBody: (body) => assert.equal(body.messages[0].content, 'hello\nworld'),
+    },
+    {
       name: 'function messages are accepted as tool messages',
       patch: { messages: [{ role: 'function', name: 'lookup', content: 'ok' }] },
-      assertBody: (body) => assert.equal(body.messages[0].role, 'tool'),
+      assertBody: (body) => {
+        assert.equal(body.messages[0].role, 'tool');
+        assert.equal(body.messages[0].tool_call_id, 'lookup');
+      },
     },
     {
       name: 'tool messages preserve tool_call_id',
       patch: { messages: [{ role: 'tool', tool_call_id: 'call_1', content: 'ok' }] },
       assertBody: (body) => assert.equal(body.messages[0].tool_call_id, 'call_1'),
+    },
+    {
+      name: 'assistant null content with tool calls passes through',
+      patch: {
+        messages: [{
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+        }],
+      },
+      assertBody: (body) => {
+        assert.equal(body.messages[0].content, null);
+        assert.equal(body.messages[0].tool_calls[0].function.name, 'lookup');
+      },
     },
     {
       name: 'modern tools pass through',
@@ -270,6 +302,26 @@ test('normalizes chat requests for agent compatibility', async (t) => {
       },
     },
     {
+      name: 'tool_choice auto passes through',
+      patch: { tool_choice: 'auto' },
+      assertBody: (body) => assert.equal(body.tool_choice, 'auto'),
+    },
+    {
+      name: 'tool_choice none passes through',
+      patch: { tool_choice: 'none' },
+      assertBody: (body) => assert.equal(body.tool_choice, 'none'),
+    },
+    {
+      name: 'tool_choice required passes through',
+      patch: { tool_choice: 'required' },
+      assertBody: (body) => assert.equal(body.tool_choice, 'required'),
+    },
+    {
+      name: 'forced tool_choice maps tool name to function choice',
+      patch: { tool_choice: { type: 'tool', name: 'lookup' } },
+      assertBody: (body) => assert.deepEqual(body.tool_choice, { type: 'function', function: { name: 'lookup' } }),
+    },
+    {
       name: 'deprecated functions convert to tools',
       patch: { functions: [{ name: 'lookup', parameters: { type: 'object' } }] },
       assertBody: (body) => {
@@ -281,6 +333,11 @@ test('normalizes chat requests for agent compatibility', async (t) => {
       name: 'deprecated function_call converts to tool_choice',
       patch: { function_call: { name: 'lookup' } },
       assertBody: (body) => assert.equal(body.tool_choice.function.name, 'lookup'),
+    },
+    {
+      name: 'response_format text passes through',
+      patch: { response_format: { type: 'text' } },
+      assertBody: (body) => assert.equal(body.response_format.type, 'text'),
     },
     {
       name: 'response_format json_object passes through',
@@ -325,6 +382,17 @@ test('normalizes chat requests for agent compatibility', async (t) => {
   }
 });
 
+test('invalid OpenAI chat roles return OpenAI-shaped errors without calling upstream', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = () => assert.fail('invalid role should not call upstream');
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: { model: 'llama', messages: [{ role: 'critic', content: 'nope' }] },
+    });
+    await assertOpenAIError(res, 400);
+  });
+});
+
 test('unsupported content modalities return 400 without calling upstream', async (t) => {
   for (const type of ['image_url', 'input_audio', 'file']) {
     await t.test(type, async () => {
@@ -338,6 +406,21 @@ test('unsupported content modalities return 400 without calling upstream', async
       });
     });
   }
+});
+
+test('strict compatibility rejects unknown json_schema response_format support', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = () => assert.fail('strict response_format rejection should not call upstream');
+    const res = await createApp({ ...testConfig(upstream.url), strictCompat: true }).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        messages: [{ role: 'user', content: 'hello' }],
+        response_format: { type: 'json_schema', json_schema: { name: 'result' } },
+      },
+    });
+    await assertOpenAIError(res, 400);
+  });
 });
 
 test('unknown OpenAI chat fields follow the configured field policy', async (t) => {

@@ -4,9 +4,15 @@ type JsonObject = Record<string, any>;
 
 export function normalizeTools(body: JsonObject): void {
   if (Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      if (isObject(tool) && tool.type === 'custom') {
+    for (const [index, tool] of body.tools.entries()) {
+      if (!isObject(tool)) {
+        throw new GatewayError(400, `tools[${index}] must be an object`);
+      }
+      if (tool.type === 'custom') {
         throw new GatewayError(400, 'custom tools are not supported by this upstream', 'invalid_request_error', 'unsupported_tool_type');
+      }
+      if (tool.type !== 'function' || !isObject(tool.function) || typeof tool.function.name !== 'string') {
+        throw new GatewayError(400, `tools[${index}] must be a function tool`);
       }
     }
   }
@@ -29,8 +35,23 @@ export function normalizeTools(body: JsonObject): void {
     }
   }
 
+  if (body.tool_choice !== undefined) {
+    body.tool_choice = normalizeToolChoice(body.tool_choice);
+  }
+
   delete body.functions;
   delete body.function_call;
+}
+
+function normalizeToolChoice(toolChoice: unknown): unknown {
+  if (toolChoice === 'auto' || toolChoice === 'none' || toolChoice === 'required') return toolChoice;
+  if (isObject(toolChoice) && toolChoice.type === 'function' && isObject(toolChoice.function) && typeof toolChoice.function.name === 'string') {
+    return toolChoice;
+  }
+  if (isObject(toolChoice) && toolChoice.type === 'tool' && typeof toolChoice.name === 'string') {
+    return { type: 'function', function: { name: toolChoice.name } };
+  }
+  throw new GatewayError(400, 'tool_choice is not supported', 'invalid_request_error', 'unsupported_tool_choice');
 }
 
 export function normalizeOpenAIToolCalls(toolCalls: unknown): JsonObject[] | undefined {
