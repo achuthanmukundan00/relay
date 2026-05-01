@@ -1,6 +1,6 @@
 import { hasValidApiKey } from '../auth.ts';
 import type { AppConfig } from '../config.ts';
-import { GatewayError, jsonResponse } from '../errors.ts';
+import { anthropicError, GatewayError, jsonResponse } from '../errors.ts';
 import { encodeSSE, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
@@ -302,10 +302,6 @@ function anthropicErrorResponse(error: unknown): Response {
     return anthropicError(error.status, error.message, anthropicType(error.status, error.type));
   }
   return anthropicError(500, 'Internal gateway error', 'api_error');
-}
-
-function anthropicError(status: number, message: string, type: string): Response {
-  return jsonResponse({ type: 'error', error: { type, message } }, status);
 }
 
 function anthropicType(status: number, type: string): string {

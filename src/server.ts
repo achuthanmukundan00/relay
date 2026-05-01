@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { hasValidApiKey } from './auth.ts';
+import { CapabilityRegistry } from './capabilities.ts';
 import type { AppConfig } from './config.ts';
-import { errorResponse, GatewayError, jsonResponse, openAIError } from './errors.ts';
+import { errorResponse, GatewayError, jsonResponse, openAIError, unsupportedEndpoint } from './errors.ts';
 import { handleAnthropicMessages } from './anthropic/messages.ts';
 import { createChatCompletion, createCompletionShim, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
 import { handleModels } from './openai/models.ts';
@@ -21,6 +22,7 @@ export function createApp(config: AppConfig): App {
   const logger = createLogger(config.logLevel);
   const store = new CompletionStore();
   const responseStore = new ResponseStore();
+  const capabilities = new CapabilityRegistry(config);
 
   async function handler(request: Request): Promise<Response> {
     const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID();
@@ -43,6 +45,14 @@ export function createApp(config: AppConfig): App {
         response = jsonResponse({ ok: true });
         return withRequestId(response, requestId);
       }
+      if (request.method === 'GET' && path === '/relay/capabilities') {
+        response = jsonResponse(capabilities.get());
+        return withRequestId(response, requestId);
+      }
+      if (request.method === 'POST' && path === '/relay/capabilities/refresh') {
+        response = jsonResponse(await capabilities.refresh());
+        return withRequestId(response, requestId);
+      }
       if (path === '/v1/messages') {
         if (request.method === 'POST') response = await handleAnthropicMessages(config, request);
         else response = jsonResponse({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, 404);
@@ -50,6 +60,9 @@ export function createApp(config: AppConfig): App {
       }
       const authError = authorizeOpenAI(config, request, path);
       if (authError) return withRequestId(authError, requestId);
+      if (isUnsupportedOpenAIEndpoint(path)) {
+        return withRequestId(unsupportedEndpoint(path), requestId);
+      }
       if (request.method === 'GET' && path === '/v1/models') {
         response = await handleModels(config);
         return withRequestId(response, requestId);
@@ -126,6 +139,12 @@ export function createApp(config: AppConfig): App {
       return handler(new Request(url, { ...init, headers, body }));
     },
     async listen() {
+      if (config.probeOnStartup) {
+        const probed = await capabilities.refresh();
+        if (config.strictStartup && !probed.upstream.reachable) {
+          throw new Error(`Upstream ${config.upstreamBaseUrl} is unreachable`);
+        }
+      }
       const server = createServer(async (req, res) => {
         const requestId = nodeHeaderValue(req.headers['x-request-id']) ?? crypto.randomUUID();
         try {
@@ -164,7 +183,22 @@ function optionsResponse(): Response {
 
 function withRequestId(response: Response, requestId: string): Response {
   response.headers.set('x-request-id', requestId);
+  response.headers.set('x-relay-request-id', requestId);
   return response;
+}
+
+function isUnsupportedOpenAIEndpoint(path: string): boolean {
+  return [
+    /^\/v1\/images(?:\/|$)/,
+    /^\/v1\/audio(?:\/|$)/,
+    /^\/v1\/files$/,
+    /^\/v1\/batches$/,
+    /^\/v1\/fine_tuning(?:\/|$)/,
+    /^\/v1\/vector_stores(?:\/|$)/,
+    /^\/v1\/assistants(?:\/|$)/,
+    /^\/v1\/threads(?:\/|$)/,
+    /^\/v1\/realtime(?:\/|$)/,
+  ].some((pattern) => pattern.test(path));
 }
 
 function authorizeOpenAI(config: AppConfig, request: Request, path: string): Response | undefined {

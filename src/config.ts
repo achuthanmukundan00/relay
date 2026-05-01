@@ -10,7 +10,15 @@ export type AppConfig = {
   completionTtlMs: number;
   upstreamVisionOk?: boolean;
   maxRequestBodyBytes: number;
+  probeOnStartup: boolean;
+  strictStartup: boolean;
+  probeTimeoutMs: number;
+  unknownFieldPolicy: UnknownFieldPolicy;
+  strictCompat: boolean;
+  warnOnStrippedFields: boolean;
 };
+
+export type UnknownFieldPolicy = 'pass_through' | 'strip' | 'reject';
 
 export type SamplingDefaults = {
   temperature?: number;
@@ -34,6 +42,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     completionTtlMs: readInteger(env.COMPLETION_TTL_SECONDS, 3600, 'COMPLETION_TTL_SECONDS') * 1000,
     upstreamVisionOk: env.UPSTREAM_VISION_OK === 'true',
     maxRequestBodyBytes: readInteger(env.MAX_REQUEST_BODY_BYTES, 1_048_576, 'MAX_REQUEST_BODY_BYTES'),
+    probeOnStartup: readBoolean(env.RELAY_PROBE_ON_STARTUP, true),
+    strictStartup: readBoolean(env.RELAY_STRICT_STARTUP, false),
+    probeTimeoutMs: readInteger(env.RELAY_PROBE_TIMEOUT_MS, 3000, 'RELAY_PROBE_TIMEOUT_MS'),
+    unknownFieldPolicy: readUnknownFieldPolicy(env.RELAY_UNKNOWN_FIELD_POLICY),
+    strictCompat: readBoolean(env.RELAY_STRICT_COMPAT, false),
+    warnOnStrippedFields: readBoolean(env.RELAY_WARN_ON_STRIPPED_FIELDS, true),
   };
 }
 
@@ -75,6 +89,18 @@ function readInteger(value: string | undefined, fallback: number, name: string):
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function readBoolean(value: string | undefined, fallback: boolean): boolean {
+  const raw = readOptional(value);
+  if (!raw) return fallback;
+  return raw.toLowerCase() === 'true';
+}
+
+function readUnknownFieldPolicy(value: string | undefined): UnknownFieldPolicy {
+  const raw = readOptional(value) ?? 'pass_through';
+  if (raw === 'pass_through' || raw === 'strip' || raw === 'reject') return raw;
+  throw new Error('RELAY_UNKNOWN_FIELD_POLICY must be pass_through, strip, or reject');
 }
 
 function readOptionalNumber(value: string | undefined, name: string): number | undefined {

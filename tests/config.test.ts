@@ -15,6 +15,12 @@ test('loads spec defaults', () => {
   assert.equal(config.logLevel, 'info');
   assert.equal(config.apiKey, undefined);
   assert.equal(config.maxRequestBodyBytes, 1_048_576);
+  assert.equal(config.probeOnStartup, true);
+  assert.equal(config.strictStartup, false);
+  assert.equal(config.probeTimeoutMs, 3000);
+  assert.equal(config.unknownFieldPolicy, 'pass_through');
+  assert.equal(config.strictCompat, false);
+  assert.equal(config.warnOnStrippedFields, true);
 });
 
 test('loads overrides from environment', () => {
@@ -33,6 +39,12 @@ test('loads overrides from environment', () => {
     LOG_LEVEL: 'debug',
     API_KEY: 'secret',
     MAX_REQUEST_BODY_BYTES: '4096',
+    RELAY_PROBE_ON_STARTUP: 'false',
+    RELAY_STRICT_STARTUP: 'true',
+    RELAY_PROBE_TIMEOUT_MS: '50',
+    RELAY_UNKNOWN_FIELD_POLICY: 'reject',
+    RELAY_STRICT_COMPAT: 'true',
+    RELAY_WARN_ON_STRIPPED_FIELDS: 'false',
   });
 
   assert.equal(config.port, 9090);
@@ -51,4 +63,10 @@ test('loads overrides from environment', () => {
   assert.equal(config.logLevel, 'debug');
   assert.equal(config.apiKey, 'secret');
   assert.equal(config.maxRequestBodyBytes, 4096);
+  assert.equal(config.probeOnStartup, false);
+  assert.equal(config.strictStartup, true);
+  assert.equal(config.probeTimeoutMs, 50);
+  assert.equal(config.unknownFieldPolicy, 'reject');
+  assert.equal(config.strictCompat, true);
+  assert.equal(config.warnOnStrippedFields, false);
 });

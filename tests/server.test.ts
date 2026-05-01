@@ -54,6 +54,50 @@ test('GET /v1/models passes through upstream model list', async () => {
   });
 });
 
+test('capability endpoints expose and refresh upstream model state', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (req, res) => {
+      assert.equal(req.url, '/v1/models');
+      sendJson(res, 200, { object: 'list', data: [{ id: 'llama', object: 'model' }] });
+    };
+    const app = createApp(testConfig(upstream.url));
+
+    const initial = await app.fetch('/relay/capabilities');
+    assert.equal(initial.status, 200);
+    assert.equal((await initial.json()).models.list, 'unknown');
+
+    const refreshed = await app.fetch('/relay/capabilities/refresh', { method: 'POST' });
+    assert.equal(refreshed.status, 200);
+    const body = await refreshed.json();
+    assert.equal(body.upstream.reachable, true);
+    assert.equal(body.models.list, 'supported');
+    assert.equal(body.models.currentModel, 'llama');
+    assert.equal(body.endpoints.chatCompletions, 'supported');
+    assert.equal(body.features.multimodalInput, 'unsupported');
+  });
+});
+
+test('capability refresh marks upstream offline without failing Relay', async () => {
+  const app = createApp({ ...testConfig('http://127.0.0.1:9'), probeTimeoutMs: 10 });
+
+  const refreshed = await app.fetch('/relay/capabilities/refresh', { method: 'POST' });
+  assert.equal(refreshed.status, 200);
+  const body = await refreshed.json();
+  assert.equal(body.upstream.reachable, false);
+  assert.equal(body.models.list, 'unsupported');
+});
+
+test('strict startup fails when upstream is offline', async () => {
+  const app = createApp({
+    ...testConfig('http://127.0.0.1:9'),
+    probeOnStartup: true,
+    strictStartup: true,
+    probeTimeoutMs: 10,
+  });
+
+  await assert.rejects(app.listen(), /unreachable/);
+});
+
 test('GET /v1/models returns synthetic list when upstream fails and DEFAULT_MODEL exists', async () => {
   await withUpstream(async (upstream) => {
     upstream.handler = (_req, res) => sendJson(res, 503, { error: 'down' });
@@ -294,6 +338,72 @@ test('unsupported content modalities return 400 without calling upstream', async
       });
     });
   }
+});
+
+test('unknown OpenAI chat fields follow the configured field policy', async (t) => {
+  await t.test('pass through by default', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = (_req, res, body) => {
+        assert.equal((body as any).llama_extra, true);
+        sendJson(res, 200, upstreamChat('llama', 'ok'));
+      };
+      const res = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+        method: 'POST',
+        body: { model: 'llama', llama_extra: true, messages: [{ role: 'user', content: 'hello' }] },
+      });
+      assert.equal(res.status, 200, await res.text());
+    });
+  });
+
+  await t.test('strip with warning', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = (_req, res, body) => {
+        assert.equal('llama_extra' in (body as any), false);
+        sendJson(res, 200, upstreamChat('llama', 'ok'));
+      };
+      const res = await createApp({ ...testConfig(upstream.url), unknownFieldPolicy: 'strip' }).fetch('/v1/chat/completions', {
+        method: 'POST',
+        body: { model: 'llama', llama_extra: true, messages: [{ role: 'user', content: 'hello' }] },
+      });
+      assert.equal(res.status, 200, await res.text());
+      assert.equal(res.headers.get('x-relay-warning'), 'stripped_unsupported_fields');
+    });
+  });
+
+  await t.test('reject', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = () => assert.fail('rejected field should not call upstream');
+      const res = await createApp({ ...testConfig(upstream.url), unknownFieldPolicy: 'reject' }).fetch('/v1/chat/completions', {
+        method: 'POST',
+        body: { model: 'llama', llama_extra: true, messages: [{ role: 'user', content: 'hello' }] },
+      });
+      await assertOpenAIError(res, 400);
+    });
+  });
+});
+
+test('hosted-only OpenAI chat fields strip permissively and reject in strict compatibility mode', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res, body) => {
+      assert.equal('service_tier' in (body as any), false);
+      sendJson(res, 200, upstreamChat('llama', 'ok'));
+    };
+    const permissive = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: { model: 'llama', service_tier: 'auto', messages: [{ role: 'user', content: 'hello' }] },
+    });
+    assert.equal(permissive.status, 200, await permissive.text());
+    assert.equal(permissive.headers.get('x-relay-warning'), 'stripped_unsupported_fields');
+  });
+
+  await withUpstream(async (upstream) => {
+    upstream.handler = () => assert.fail('strict hosted-only field should not call upstream');
+    const strict = await createApp({ ...testConfig(upstream.url), strictCompat: true }).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: { model: 'llama', service_tier: 'auto', messages: [{ role: 'user', content: 'hello' }] },
+    });
+    await assertOpenAIError(strict, 400);
+  });
 });
 
 test('unsupported custom tools return 400 without calling upstream', async () => {

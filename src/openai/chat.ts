@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config.ts';
 import { GatewayError, jsonResponse } from '../errors.ts';
+import { applyOpenAIChatFieldPolicy } from '../field-policy.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
 import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
 import { normalizeOpenAIToolCalls, normalizeTools } from '../normalize/tools.ts';
@@ -72,11 +73,9 @@ export class CompletionStore {
 export async function createChatCompletion(config: AppConfig, store: CompletionStore, body: unknown): Promise<Response> {
   if (!isObject(body)) throw new GatewayError(400, 'JSON body must be an object');
   const original = body;
-  const normalized = normalizeChatRequest(original, config);
+  const { body: normalized, strippedFields } = normalizeChatRequest(original, config);
 
-  if (normalized.stream === true) {
-    return streamChatCompletion(config, normalized);
-  }
+  if (normalized.stream === true) return withFieldWarning(await streamChatCompletion(config, normalized), strippedFields, config);
 
   const upstream = await upstreamJson(config, '/v1/chat/completions', {
     method: 'POST',
@@ -87,7 +86,7 @@ export async function createChatCompletion(config: AppConfig, store: CompletionS
   if (original.store === true) {
     store.save(completion, normalized.messages, config.completionTtlMs);
   }
-  return jsonResponse(completion);
+  return withFieldWarning(jsonResponse(completion), strippedFields, config);
 }
 
 export async function createCompletionShim(config: AppConfig, store: CompletionStore, body: unknown): Promise<Response> {
@@ -177,26 +176,30 @@ function chatCompletionToTextCompletion(chat: JsonObject, original: JsonObject):
   };
 }
 
-function normalizeChatRequest(input: JsonObject, config: AppConfig): JsonObject {
+function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: JsonObject; strippedFields: string[] } {
   const allowed = [
     'model', 'messages', 'temperature', 'top_p', 'max_tokens', 'stream', 'stream_options', 'stop',
     'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'frequency_penalty',
     'presence_penalty', 'seed', 'n', 'logprobs', 'top_logprobs', 'metadata', 'user',
-    'reasoning_effort', 'verbosity', 'functions', 'function_call',
+    'reasoning_effort', 'verbosity', 'functions', 'function_call', 'max_completion_tokens', 'store',
   ];
-  const body: JsonObject = {};
-  for (const key of allowed) {
-    if (input[key] !== undefined) body[key] = input[key];
-  }
+  const { body, strippedFields } = applyOpenAIChatFieldPolicy(input, allowed, config);
   if (body.max_tokens === undefined && input.max_completion_tokens !== undefined) {
     body.max_tokens = input.max_completion_tokens;
   }
+  delete body.max_completion_tokens;
+  delete body.store;
   applySamplingDefaults(body, config.samplingDefaults);
   body.messages = normalizeMessages(body.messages, config);
   normalizeTools(body);
   // llama.cpp accepts OpenAI JSON-mode fields on recent builds. Strict json_schema
   // enforcement is not claimed here; the gateway passes the request through as-is.
-  return body;
+  return { body, strippedFields };
+}
+
+function withFieldWarning(response: Response, strippedFields: string[], config: AppConfig): Response {
+  if (config.warnOnStrippedFields !== false && strippedFields.length > 0) response.headers.set('x-relay-warning', 'stripped_unsupported_fields');
+  return response;
 }
 
 function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {

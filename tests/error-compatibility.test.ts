@@ -36,6 +36,18 @@ test('Anthropic bad JSON and unsupported endpoint use provider-native shapes', a
   assert.equal(unsupportedBody.error.type, 'not_found_error');
 });
 
+test('known hosted OpenAI endpoints return deterministic unsupported endpoint errors', async () => {
+  const app = createApp(testConfig('http://127.0.0.1:9'));
+
+  const response = await app.fetch('/v1/audio/transcriptions', { method: 'POST', body: {} });
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get('x-relay-request-id') !== null, true);
+  const body = await response.json();
+  assert.equal(body.error.type, 'unsupported_endpoint');
+  assert.equal(body.error.code, 'unsupported_endpoint');
+  assert.match(body.error.message, /local llama\.cpp backend/);
+});
+
 test('upstream connection refused maps to 502 without leaking stack traces', async () => {
   const app = createApp(testConfig('http://127.0.0.1:9'));
   const response = await app.fetch('/v1/chat/completions', {
@@ -54,7 +66,7 @@ test('internal bugs return sanitized 500 OpenAI-shaped errors', async () => {
   assert.equal(response.status, 500);
   const text = await response.text();
   assert.doesNotMatch(text, /exploded|stack/i);
-  assert.equal(JSON.parse(text).error.type, 'server_error');
+  assert.equal(JSON.parse(text).error.type, 'internal_error');
 });
 
 function testConfig(upstreamBaseUrl: string): AppConfig {
