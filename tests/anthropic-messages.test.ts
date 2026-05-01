@@ -184,6 +184,72 @@ test('Anthropic streaming converts OpenAI chunks to message events', async () =>
   });
 });
 
+test('Anthropic unknown fields follow the configured field policy', async (t) => {
+  await t.test('pass through by default', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = async (_req, res, body) => {
+        assert.equal((body as any).llama_extra, true);
+        sendJson(res, 200, chatCompletion('llama', { role: 'assistant', content: 'ok' }, 'stop'));
+      };
+      const res = await createApp(testConfig(upstream.url)).fetch('/v1/messages', {
+        method: 'POST',
+        body: { model: 'llama', max_tokens: 4, messages: [{ role: 'user', content: 'hi' }], llama_extra: true },
+      });
+      assert.equal(res.status, 200, await res.text());
+    });
+  });
+
+  await t.test('strip with warning', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = async (_req, res, body) => {
+        assert.equal('llama_extra' in (body as any), false);
+        sendJson(res, 200, chatCompletion('llama', { role: 'assistant', content: 'ok' }, 'stop'));
+      };
+      const res = await createApp({ ...testConfig(upstream.url), unknownFieldPolicy: 'strip' }).fetch('/v1/messages', {
+        method: 'POST',
+        body: { model: 'llama', max_tokens: 4, messages: [{ role: 'user', content: 'hi' }], llama_extra: true },
+      });
+      assert.equal(res.status, 200, await res.text());
+      assert.equal(res.headers.get('x-relay-warning'), 'stripped_unsupported_fields');
+    });
+  });
+
+  await t.test('reject', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = () => assert.fail('rejected field should not call upstream');
+      const res = await createApp({ ...testConfig(upstream.url), unknownFieldPolicy: 'reject' }).fetch('/v1/messages', {
+        method: 'POST',
+        body: { model: 'llama', max_tokens: 4, messages: [{ role: 'user', content: 'hi' }], llama_extra: true },
+      });
+      assert.equal(res.status, 400);
+      const body = await res.json();
+      assert.equal(body.type, 'error');
+      assert.equal(body.error.type, 'invalid_request_error');
+      assert.match(body.error.message, /llama_extra/);
+    });
+  });
+});
+
+test('Anthropic strips thinking permissively with warning', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (_req, res, body) => {
+      assert.equal('thinking' in (body as any), false);
+      sendJson(res, 200, chatCompletion('llama', { role: 'assistant', content: 'ok' }, 'stop'));
+    };
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/messages', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        max_tokens: 4,
+        thinking: { type: 'enabled' },
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+    });
+    assert.equal(res.status, 200, await res.text());
+    assert.equal(res.headers.get('x-relay-warning'), 'stripped_unsupported_fields');
+  });
+});
+
 function testConfig(upstreamBaseUrl: string): AppConfig {
   return {
     port: 8080,

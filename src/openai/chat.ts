@@ -1,6 +1,6 @@
 import type { AppConfig } from '../config.ts';
 import { GatewayError, invalidRequestError, jsonResponse, missingRequiredFieldError, unsupportedCapabilityError, upstreamError } from '../errors.ts';
-import { applyOpenAIChatFieldPolicy } from '../field-policy.ts';
+import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
 import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
 import { normalizeOpenAIToolCalls, normalizeTools } from '../normalize/tools.ts';
@@ -180,13 +180,7 @@ function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: Jso
   if (input.messages === undefined) {
     throw missingRequiredFieldError('messages');
   }
-  const allowed = [
-    'model', 'messages', 'temperature', 'top_p', 'max_tokens', 'stream', 'stream_options', 'stop',
-    'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'frequency_penalty',
-    'presence_penalty', 'seed', 'n', 'logprobs', 'top_logprobs', 'metadata', 'user',
-    'reasoning_effort', 'verbosity', 'functions', 'function_call', 'max_completion_tokens', 'store',
-  ];
-  const { body, strippedFields } = applyOpenAIChatFieldPolicy(input, allowed, config);
+  const { body, strippedFields } = applyFieldPolicy('openai_chat', input, config);
   if (body.max_tokens === undefined && input.max_completion_tokens !== undefined) {
     body.max_tokens = input.max_completion_tokens;
   }
@@ -212,11 +206,6 @@ function normalizeResponseFormat(body: JsonObject, config: AppConfig): void {
     return;
   }
   throw invalidRequestError('response_format.type is not supported', 'unsupported_parameter', 'response_format');
-}
-
-function withFieldWarning(response: Response, strippedFields: string[], config: AppConfig): Response {
-  if (config.warnOnStrippedFields !== false && strippedFields.length > 0) response.headers.set('x-relay-warning', 'stripped_unsupported_fields');
-  return response;
 }
 
 function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {

@@ -1,6 +1,7 @@
 import { hasValidApiKey } from '../auth.ts';
 import type { AppConfig } from '../config.ts';
 import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRequiredFieldError, upstreamError } from '../errors.ts';
+import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { encodeSSE, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
@@ -10,15 +11,16 @@ type JsonObject = Record<string, any>;
 export async function handleAnthropicMessages(config: AppConfig, request: Request): Promise<Response> {
   try {
     authorizeAnthropic(config, request);
-    const body = await readJson(request);
+    const rawBody = await readJson(request);
+    const { body, strippedFields } = applyFieldPolicy('anthropic_messages', rawBody, config);
     const chatRequest = anthropicRequestToChat(body, config);
-    if (body.stream === true) return await streamAnthropicMessage(config, chatRequest);
+    if (body.stream === true) return withFieldWarning(await streamAnthropicMessage(config, chatRequest), strippedFields, config);
     const chat = await upstreamJson(config, '/v1/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(chatRequest),
     });
-    return jsonResponse(chatCompletionToAnthropicMessage(chat, body.model));
+    return withFieldWarning(jsonResponse(chatCompletionToAnthropicMessage(chat, body.model)), strippedFields, config);
   } catch (error) {
     return anthropicErrorResponse(error);
   }
@@ -51,19 +53,14 @@ function anthropicRequestToChat(input: JsonObject, config: AppConfig): JsonObjec
   if (system) messages.push({ role: 'system', content: system });
   messages.push(...normalizeAnthropicMessages(input.messages));
 
-  const chat: JsonObject = {
-    model: input.model,
-    max_tokens: input.max_tokens,
-    messages,
-  };
-  for (const key of ['temperature', 'top_p', 'metadata', 'stream']) {
-    if (input[key] !== undefined) chat[key] = input[key];
-  }
+  const chat: JsonObject = { ...input, messages };
   if (input.stop_sequences !== undefined) chat.stop = input.stop_sequences;
   const tools = normalizeAnthropicTools(input.tools);
   if (tools) chat.tools = tools;
   const toolChoice = normalizeAnthropicToolChoice(input.tool_choice);
   if (toolChoice !== undefined) chat.tool_choice = toolChoice;
+  delete chat.system;
+  delete chat.stop_sequences;
   applySamplingDefaults(chat, config.samplingDefaults);
   // TODO: Map Anthropic thinking to model-specific reasoning controls when an
   // upstream supports it. For now it is accepted and intentionally not forwarded.

@@ -1,5 +1,7 @@
 import type { AppConfig } from '../config.ts';
 import { GatewayError, invalidRequestError, jsonResponse, upstreamError } from '../errors.ts';
+import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
+import { normalizeMessages } from '../normalize/messages.ts';
 import { streamHeaders } from '../normalize/stream.ts';
 import { normalizeTools } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
@@ -33,8 +35,9 @@ export class ResponseStore {
 
 export async function createResponse(config: AppConfig, store: ResponseStore, body: unknown): Promise<Response> {
   if (!isObject(body)) throw invalidRequestError('JSON body must be an object');
-  const chatRequest = responseRequestToChat(body, config);
-  if (body.stream === true) return streamResponse(config, chatRequest);
+  const { body: normalized, strippedFields } = applyFieldPolicy('openai_responses', body, config);
+  const chatRequest = responseRequestToChat(normalized, config);
+  if (normalized.stream === true) return withFieldWarning(await streamResponse(config, chatRequest), strippedFields, config);
 
   const chat = await upstreamJson(config, '/v1/chat/completions', {
     method: 'POST',
@@ -43,7 +46,7 @@ export async function createResponse(config: AppConfig, store: ResponseStore, bo
   });
   const response = chatCompletionToResponse(chat, body.model);
   store.save(response, config.completionTtlMs);
-  return jsonResponse(response);
+  return withFieldWarning(jsonResponse(response), strippedFields, config);
 }
 
 export function getResponse(store: ResponseStore, id: string): Response {
@@ -65,19 +68,18 @@ function responseRequestToChat(input: JsonObject, config: AppConfig): JsonObject
   if (typeof input.input === 'string') {
     messages.push({ role: 'user', content: input.input });
   } else if (Array.isArray(input.input)) {
-    messages.push(...input.input);
+    messages.push(...normalizeMessages(input.input, config));
   } else {
     throw invalidRequestError('input must be a string or message array');
   }
 
-  const chat: JsonObject = {
-    model: input.model,
-    messages,
-  };
-  for (const key of ['temperature', 'top_p', 'tools', 'tool_choice', 'stream']) {
-    if (input[key] !== undefined) chat[key] = input[key];
-  }
+  const chat: JsonObject = { ...input, messages };
   if (input.max_output_tokens !== undefined) chat.max_tokens = input.max_output_tokens;
+  delete chat.instructions;
+  delete chat.input;
+  delete chat.max_output_tokens;
+  delete chat.previous_response_id;
+  delete chat.store;
   applySamplingDefaults(chat, config.samplingDefaults);
   normalizeTools(chat);
   return chat;

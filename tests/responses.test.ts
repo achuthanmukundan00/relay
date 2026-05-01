@@ -106,6 +106,76 @@ test('POST /v1/responses stream emits Responses-style SSE without OpenAI DONE', 
   });
 });
 
+test('Responses unknown fields follow the configured field policy', async (t) => {
+  await t.test('pass through by default', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = async (_req, res, body) => {
+        assert.equal((body as any).llama_extra, true);
+        sendJson(res, 200, chatCompletion('llama', 'ok'));
+      };
+      const res = await createApp(testConfig(upstream.url)).fetch('/v1/responses', {
+        method: 'POST',
+        body: { model: 'llama', input: 'hello', llama_extra: true },
+      });
+      assert.equal(res.status, 200, await res.text());
+    });
+  });
+
+  await t.test('strip with warning', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = async (_req, res, body) => {
+        assert.equal('llama_extra' in (body as any), false);
+        sendJson(res, 200, chatCompletion('llama', 'ok'));
+      };
+      const res = await createApp({ ...testConfig(upstream.url), unknownFieldPolicy: 'strip' }).fetch('/v1/responses', {
+        method: 'POST',
+        body: { model: 'llama', input: 'hello', llama_extra: true },
+      });
+      assert.equal(res.status, 200, await res.text());
+      assert.equal(res.headers.get('x-relay-warning'), 'stripped_unsupported_fields');
+    });
+  });
+
+  await t.test('reject', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = () => assert.fail('rejected field should not call upstream');
+      const res = await createApp({ ...testConfig(upstream.url), unknownFieldPolicy: 'reject' }).fetch('/v1/responses', {
+        method: 'POST',
+        body: { model: 'llama', input: 'hello', llama_extra: true },
+      });
+      assert.equal(res.status, 400);
+      assert.equal((await res.json()).error.code, 'unsupported_parameter');
+    });
+  });
+});
+
+test('Responses hosted-only fields strip permissively and reject in strict compatibility mode', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (_req, res, body) => {
+      assert.equal('service_tier' in (body as any), false);
+      sendJson(res, 200, chatCompletion('llama', 'ok'));
+    };
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/responses', {
+      method: 'POST',
+      body: { model: 'llama', input: 'hello', service_tier: 'auto' },
+    });
+    assert.equal(res.status, 200, await res.text());
+    assert.equal(res.headers.get('x-relay-warning'), 'stripped_unsupported_fields');
+  });
+
+  await withUpstream(async (upstream) => {
+    upstream.handler = () => assert.fail('strict hosted-only field should not call upstream');
+    const res = await createApp({ ...testConfig(upstream.url), strictCompat: true }).fetch('/v1/responses', {
+      method: 'POST',
+      body: { model: 'llama', input: 'hello', service_tier: 'auto' },
+    });
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.error.type, 'unsupported_capability');
+    assert.equal(body.error.code, 'unsupported_capability');
+  });
+});
+
 function testConfig(upstreamBaseUrl: string): AppConfig {
   return {
     port: 8080,
