@@ -712,7 +712,7 @@ async function assertOpenAIError(res: Response, status: number) {
   const json = JSON.parse(text);
   assert.equal(typeof json.error.message, 'string');
   assert.equal(typeof json.error.type, 'string');
-  assert.equal(json.error.param ?? null, null);
+  assert.equal(json.error.param === null || typeof json.error.param === 'string', true);
 }
 
 function upstreamChat(model: string, content: string): any {

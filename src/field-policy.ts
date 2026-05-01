@@ -1,5 +1,5 @@
 import type { AppConfig } from './config.ts';
-import { GatewayError } from './errors.ts';
+import { unsupportedParameterError } from './errors.ts';
 
 type JsonObject = Record<string, any>;
 
@@ -35,7 +35,7 @@ export function applyOpenAIChatFieldPolicy(input: JsonObject, allowed: string[],
     } else if (action === 'strip') {
       strippedFields.push(key);
     } else {
-      throw new GatewayError(400, `${key} is not supported by this local llama.cpp backend`, 'invalid_request_error', 'unsupported_parameter');
+      throw unsupportedParameterError(key);
     }
   }
   return { body, strippedFields };

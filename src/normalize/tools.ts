@@ -1,4 +1,4 @@
-import { GatewayError } from '../errors.ts';
+import { GatewayError, upstreamError } from '../errors.ts';
 
 type JsonObject = Record<string, any>;
 
@@ -105,20 +105,20 @@ export function parseToolArguments(argumentsValue: unknown): JsonObject {
       if (!isObject(parsed)) throw new Error('tool arguments must be an object');
       return parsed;
     } catch {
-      throw new GatewayError(502, 'Invalid tool call arguments from upstream', 'server_error');
+      throw upstreamError('bad_response', 'Invalid tool call arguments from upstream');
     }
   }
   if (isObject(argumentsValue)) return argumentsValue;
-  throw new GatewayError(502, 'Invalid tool call arguments from upstream', 'server_error');
+  throw upstreamError('bad_response', 'Invalid tool call arguments from upstream');
 }
 
 function normalizeOpenAIToolCall(toolCall: unknown, index: number): JsonObject {
   if (!isObject(toolCall)) {
-    throw new GatewayError(502, 'Invalid tool call from upstream', 'server_error');
+    throw upstreamError('bad_response', 'Invalid tool call from upstream');
   }
   const fn = isObject(toolCall.function) ? toolCall.function : {};
   if (typeof fn.name !== 'string' || fn.name.length === 0) {
-    throw new GatewayError(502, 'Tool call from upstream is missing a function name', 'server_error');
+    throw upstreamError('bad_response', 'Tool call from upstream is missing a function name');
   }
   return {
     id: typeof toolCall.id === 'string' && toolCall.id.length > 0 ? toolCall.id : stableToolCallId(fn.name, index),
@@ -137,7 +137,7 @@ function normalizeToolArguments(argumentsValue: unknown): string {
     return argumentsValue;
   }
   if (isObject(argumentsValue)) return JSON.stringify(argumentsValue);
-  throw new GatewayError(502, 'Invalid tool call arguments from upstream', 'server_error');
+  throw upstreamError('bad_response', 'Invalid tool call arguments from upstream');
 }
 
 function stableToolCallId(name: string, index: number): string {

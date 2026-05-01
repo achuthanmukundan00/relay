@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { hasValidApiKey } from './auth.ts';
 import { CapabilityRegistry } from './capabilities.ts';
 import type { AppConfig } from './config.ts';
-import { errorResponse, GatewayError, jsonResponse, openAIError, unsupportedEndpoint } from './errors.ts';
+import { errorResponse, invalidJsonError, jsonResponse, openAIError, requestTooLargeError, unsupportedEndpoint } from './errors.ts';
 import { handleAnthropicMessages } from './anthropic/messages.ts';
 import { createChatCompletion, createCompletionShim, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
 import { handleModels } from './openai/models.ts';
@@ -213,7 +213,7 @@ async function readJson(request: Request): Promise<unknown> {
   try {
     return await request.json();
   } catch {
-    throw new GatewayError(400, 'Invalid JSON body');
+    throw invalidJsonError();
   }
 }
 
@@ -221,14 +221,14 @@ async function nodeRequestToWebRequest(req: IncomingMessage, config: AppConfig):
   const chunks: Buffer[] = [];
   let totalBytes = contentLength(req);
   if (totalBytes !== undefined && totalBytes > config.maxRequestBodyBytes) {
-    throw new GatewayError(413, 'Request body too large');
+    throw requestTooLargeError();
   }
   totalBytes = 0;
   for await (const chunk of req) {
     const buffer = Buffer.from(chunk);
     totalBytes += buffer.byteLength;
     if (totalBytes > config.maxRequestBodyBytes) {
-      throw new GatewayError(413, 'Request body too large');
+      throw requestTooLargeError();
     }
     chunks.push(buffer);
   }

@@ -37,6 +37,34 @@ export function unsupportedEndpoint(path: string): Response {
   );
 }
 
+export function invalidJsonError(message = 'Invalid JSON body'): GatewayError {
+  return new GatewayError(400, message, 'invalid_request_error', 'invalid_json');
+}
+
+export function invalidRequestError(message: string, code = 'invalid_request', param: string | null = null): GatewayError {
+  return new GatewayError(400, message, 'invalid_request_error', code, param);
+}
+
+export function missingRequiredFieldError(field: string, message = `${field} is required`): GatewayError {
+  return new GatewayError(400, message, 'invalid_request_error', 'missing_required_field', field);
+}
+
+export function requestTooLargeError(message = 'Request body too large'): GatewayError {
+  return new GatewayError(413, message, 'invalid_request_error', 'request_too_large');
+}
+
+export function unsupportedParameterError(parameter: string, message = `${parameter} is not supported by this local llama.cpp backend`): GatewayError {
+  return new GatewayError(400, message, 'invalid_request_error', 'unsupported_parameter', parameter);
+}
+
+export function unsupportedCapabilityError(message: string): GatewayError {
+  return new GatewayError(400, message, 'unsupported_capability', 'unsupported_capability');
+}
+
+export function upstreamError(kind: 'unavailable' | 'timeout' | 'bad_response' | 'stream_interrupted', message: string): GatewayError {
+  return new GatewayError(statusForUpstream(kind), message, 'upstream_error', codeForUpstream(kind));
+}
+
 export function errorResponse(error: unknown): Response {
   if (error instanceof GatewayError) {
     return openAIError(error.status, error.message, error.type, error.code, error.param);
@@ -74,4 +102,16 @@ function anthropicType(status: number): string {
   if (status === 404) return 'not_found_error';
   if (status >= 500) return 'api_error';
   return 'invalid_request_error';
+}
+
+function codeForUpstream(kind: 'unavailable' | 'timeout' | 'bad_response' | 'stream_interrupted'): string {
+  if (kind === 'timeout') return 'upstream_timeout';
+  if (kind === 'bad_response') return 'upstream_bad_response';
+  if (kind === 'stream_interrupted') return 'stream_interrupted';
+  return 'upstream_unavailable';
+}
+
+function statusForUpstream(kind: 'unavailable' | 'timeout' | 'bad_response' | 'stream_interrupted'): number {
+  if (kind === 'timeout') return 504;
+  return 502;
 }

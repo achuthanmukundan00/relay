@@ -1,6 +1,6 @@
 import { hasValidApiKey } from '../auth.ts';
 import type { AppConfig } from '../config.ts';
-import { anthropicError, GatewayError, jsonResponse } from '../errors.ts';
+import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRequiredFieldError, upstreamError } from '../errors.ts';
 import { encodeSSE, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
@@ -38,13 +38,13 @@ async function readJson(request: Request): Promise<JsonObject> {
     if (!isObject(body)) throw new Error('not object');
     return body;
   } catch {
-    throw new GatewayError(400, 'Invalid JSON body');
+    throw invalidJsonError();
   }
 }
 
 function anthropicRequestToChat(input: JsonObject, config: AppConfig): JsonObject {
   if (input.max_tokens === undefined) {
-    throw new GatewayError(400, 'max_tokens is required');
+    throw missingRequiredFieldError('max_tokens');
   }
   const messages: JsonObject[] = [];
   const system = normalizeSystem(input.system);
@@ -184,7 +184,7 @@ function normalizeAnthropicToolChoice(toolChoice: unknown): unknown {
 }
 
 function chatCompletionToAnthropicMessage(chat: unknown, requestedModel: unknown): JsonObject {
-  if (!isObject(chat)) throw new GatewayError(502, 'Upstream returned invalid completion', 'api_error');
+  if (!isObject(chat)) throw upstreamError('bad_response', 'Upstream returned invalid completion');
   const choice = Array.isArray(chat.choices) ? chat.choices[0] : undefined;
   const message = isObject(choice?.message) ? choice.message : {};
   return {
@@ -209,7 +209,7 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
     body: JSON.stringify(chatRequest),
   });
   if (!upstream.response.ok || !upstream.response.body) {
-    throw new GatewayError(502, 'Upstream llama server is unavailable', 'api_error');
+    throw upstream.response.body ? upstreamError('unavailable', 'Upstream llama server is unavailable') : upstreamError('bad_response', 'Upstream returned an empty stream');
   }
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();

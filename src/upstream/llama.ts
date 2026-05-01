@@ -1,4 +1,4 @@
-import { GatewayError } from '../errors.ts';
+import { upstreamError } from '../errors.ts';
 import type { AppConfig } from '../config.ts';
 
 export type UpstreamResult = {
@@ -14,12 +14,12 @@ export async function upstreamJson(config: AppConfig, path: string, init: Reques
     },
   });
   if (!result.response.ok) {
-    throw new GatewayError(502, 'Upstream llama server is unavailable', 'server_error');
+    throw upstreamError('unavailable', 'Upstream llama server is unavailable');
   }
   try {
     return await result.response.json();
   } catch {
-    throw new GatewayError(502, 'Upstream returned invalid JSON', 'server_error');
+    throw upstreamError('bad_response', 'Upstream returned invalid JSON');
   }
 }
 
@@ -34,9 +34,9 @@ export async function upstreamFetch(config: AppConfig, path: string, init: Reque
     return { response };
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new GatewayError(504, 'Upstream llama server timed out', 'server_error');
+      throw upstreamError('timeout', 'Upstream llama server timed out');
     }
-    throw new GatewayError(502, 'Upstream llama server is unavailable', 'server_error');
+    throw upstreamError('unavailable', 'Upstream llama server is unavailable');
   } finally {
     clearTimeout(timeout);
   }

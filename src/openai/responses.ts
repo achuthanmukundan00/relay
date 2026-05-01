@@ -1,5 +1,5 @@
 import type { AppConfig } from '../config.ts';
-import { GatewayError, jsonResponse } from '../errors.ts';
+import { GatewayError, invalidRequestError, jsonResponse, upstreamError } from '../errors.ts';
 import { streamHeaders } from '../normalize/stream.ts';
 import { normalizeTools } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
@@ -32,7 +32,7 @@ export class ResponseStore {
 }
 
 export async function createResponse(config: AppConfig, store: ResponseStore, body: unknown): Promise<Response> {
-  if (!isObject(body)) throw new GatewayError(400, 'JSON body must be an object');
+  if (!isObject(body)) throw invalidRequestError('JSON body must be an object');
   const chatRequest = responseRequestToChat(body, config);
   if (body.stream === true) return streamResponse(config, chatRequest);
 
@@ -67,7 +67,7 @@ function responseRequestToChat(input: JsonObject, config: AppConfig): JsonObject
   } else if (Array.isArray(input.input)) {
     messages.push(...input.input);
   } else {
-    throw new GatewayError(400, 'input must be a string or message array');
+    throw invalidRequestError('input must be a string or message array');
   }
 
   const chat: JsonObject = {
@@ -90,7 +90,7 @@ function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDe
 }
 
 function chatCompletionToResponse(chat: unknown, requestedModel: unknown): JsonObject {
-  if (!isObject(chat)) throw new GatewayError(502, 'Upstream returned invalid completion', 'server_error');
+  if (!isObject(chat)) throw upstreamError('bad_response', 'Upstream returned invalid completion');
   const choice = Array.isArray(chat.choices) ? chat.choices[0] : undefined;
   const message = isObject(choice?.message) ? choice.message : {};
   const output: JsonObject[] = [{
@@ -133,7 +133,7 @@ async function streamResponse(config: AppConfig, chatRequest: JsonObject): Promi
     body: JSON.stringify(chatRequest),
   });
   if (!upstream.response.ok || !upstream.response.body) {
-    throw new GatewayError(502, 'Upstream llama server is unavailable', 'server_error');
+    throw upstream.response.body ? upstreamError('unavailable', 'Upstream llama server is unavailable') : upstreamError('bad_response', 'Upstream returned an empty stream');
   }
 
   const responseId = `resp_${crypto.randomUUID()}`;

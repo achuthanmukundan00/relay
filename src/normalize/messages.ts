@@ -1,11 +1,11 @@
-import { GatewayError } from '../errors.ts';
+import { GatewayError, invalidRequestError } from '../errors.ts';
 import type { AppConfig } from '../config.ts';
 
 type JsonObject = Record<string, any>;
 
 export function normalizeMessages(messages: unknown, config: AppConfig): JsonObject[] {
   if (!Array.isArray(messages)) {
-    throw new GatewayError(400, 'messages must be an array');
+    throw invalidRequestError('messages must be an array');
   }
   return messages.map((raw, index) => normalizeMessage(raw, index, config));
 }
@@ -33,7 +33,7 @@ function normalizeContent(content: unknown, message: JsonObject, config: AppConf
   if (content === null && message.role === 'assistant' && Array.isArray(message.tool_calls)) return null;
   if (typeof content === 'string' || content === null || content === undefined) return content;
   if (!Array.isArray(content)) {
-    throw new GatewayError(400, 'message content must be a string, null, or content part array');
+    throw invalidRequestError('message content must be a string, null, or content part array');
   }
   const text: string[] = [];
   let hasPassthroughPart = false;

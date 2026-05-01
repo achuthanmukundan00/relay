@@ -1,5 +1,5 @@
 import type { AppConfig } from '../config.ts';
-import { GatewayError, jsonResponse } from '../errors.ts';
+import { GatewayError, invalidRequestError, jsonResponse, missingRequiredFieldError, unsupportedCapabilityError, upstreamError } from '../errors.ts';
 import { applyOpenAIChatFieldPolicy } from '../field-policy.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
 import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
@@ -71,7 +71,7 @@ export class CompletionStore {
 }
 
 export async function createChatCompletion(config: AppConfig, store: CompletionStore, body: unknown): Promise<Response> {
-  if (!isObject(body)) throw new GatewayError(400, 'JSON body must be an object');
+  if (!isObject(body)) throw invalidRequestError('JSON body must be an object');
   const original = body;
   const { body: normalized, strippedFields } = normalizeChatRequest(original, config);
 
@@ -90,7 +90,7 @@ export async function createChatCompletion(config: AppConfig, store: CompletionS
 }
 
 export async function createCompletionShim(config: AppConfig, store: CompletionStore, body: unknown): Promise<Response> {
-  if (!isObject(body)) throw new GatewayError(400, 'JSON body must be an object');
+  if (!isObject(body)) throw invalidRequestError('JSON body must be an object');
   const chatBody = completionRequestToChat(body);
   const chatResponse = await createChatCompletion(config, store, chatBody);
   if (chatBody.stream === true) return chatResponse;
@@ -110,7 +110,7 @@ export function getStoredCompletion(store: CompletionStore, id: string): Respons
 }
 
 export async function updateStoredCompletion(store: CompletionStore, id: string, body: unknown): Promise<Response> {
-  if (!isObject(body)) throw new GatewayError(400, 'JSON body must be an object');
+  if (!isObject(body)) throw invalidRequestError('JSON body must be an object');
   const keys = Object.keys(body);
   if (keys.some((key) => key !== 'metadata')) {
     throw new GatewayError(400, 'Only metadata can be updated on stored completions');
@@ -177,6 +177,9 @@ function chatCompletionToTextCompletion(chat: JsonObject, original: JsonObject):
 }
 
 function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: JsonObject; strippedFields: string[] } {
+  if (input.messages === undefined) {
+    throw missingRequiredFieldError('messages');
+  }
   const allowed = [
     'model', 'messages', 'temperature', 'top_p', 'max_tokens', 'stream', 'stream_options', 'stop',
     'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'frequency_penalty',
@@ -204,11 +207,11 @@ function normalizeResponseFormat(body: JsonObject, config: AppConfig): void {
   if (body.response_format.type === 'text' || body.response_format.type === 'json_object') return;
   if (body.response_format.type === 'json_schema') {
     if (config.strictCompat) {
-      throw new GatewayError(400, 'response_format json_schema support is unknown for this upstream', 'unsupported_capability', 'unsupported_capability');
+      throw unsupportedCapabilityError('response_format json_schema support is unknown for this upstream');
     }
     return;
   }
-  throw new GatewayError(400, 'response_format.type is not supported', 'invalid_request_error', 'unsupported_parameter');
+  throw invalidRequestError('response_format.type is not supported', 'unsupported_parameter', 'response_format');
 }
 
 function withFieldWarning(response: Response, strippedFields: string[], config: AppConfig): Response {
@@ -232,10 +235,10 @@ async function streamChatCompletion(config: AppConfig, body: JsonObject): Promis
     body: JSON.stringify(body),
   });
   if (!upstream.response.ok) {
-    throw new GatewayError(502, 'Upstream llama server is unavailable', 'server_error');
+    throw upstreamError('unavailable', 'Upstream llama server is unavailable');
   }
   if (!upstream.response.body) {
-    throw new GatewayError(502, 'Upstream returned an empty stream', 'server_error');
+    throw upstreamError('bad_response', 'Upstream returned an empty stream');
   }
   return new Response(ensureOpenAIStreamDone(upstream.response.body), {
     status: 200,
@@ -244,7 +247,7 @@ async function streamChatCompletion(config: AppConfig, body: JsonObject): Promis
 }
 
 function normalizeCompletion(raw: unknown, requestedModel: unknown, metadata: unknown): JsonObject {
-  if (!isObject(raw)) throw new GatewayError(502, 'Upstream returned invalid completion', 'server_error');
+  if (!isObject(raw)) throw upstreamError('bad_response', 'Upstream returned invalid completion');
   const completion: JsonObject = {
     id: typeof raw.id === 'string' ? raw.id : `chatcmpl-${crypto.randomUUID()}`,
     object: 'chat.completion',
@@ -256,7 +259,7 @@ function normalizeCompletion(raw: unknown, requestedModel: unknown, metadata: un
   if (raw.system_fingerprint !== undefined) completion.system_fingerprint = raw.system_fingerprint;
   if (isObject(metadata)) completion.metadata = metadata;
   if (completion.choices.length === 0) {
-    throw new GatewayError(502, 'Upstream returned no choices', 'server_error');
+    throw upstreamError('bad_response', 'Upstream returned no choices');
   }
   for (const choice of completion.choices) {
     validateAssistantChoice(choice);
@@ -287,7 +290,7 @@ function validateAssistantChoice(choice: JsonObject): void {
   const hasTools = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
   const hasFunction = isObject(message.function_call);
   if (!hasContent && !hasRefusal && !hasTools && !hasFunction && choice.finish_reason !== 'stop') {
-    throw new GatewayError(502, 'Upstream returned an empty assistant response', 'server_error');
+    throw upstreamError('bad_response', 'Upstream returned an empty assistant response');
   }
 }
 
