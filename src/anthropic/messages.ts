@@ -1,6 +1,6 @@
 import { hasValidApiKey } from '../auth.ts';
 import type { AppConfig } from '../config.ts';
-import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRequiredFieldError, upstreamError } from '../errors.ts';
+import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRequiredFieldError, unsupportedCapabilityError, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { encodeSSE, parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
@@ -21,6 +21,32 @@ export async function handleAnthropicMessages(config: AppConfig, request: Reques
       body: JSON.stringify(chatRequest),
     });
     return withFieldWarning(jsonResponse(chatCompletionToAnthropicMessage(chat, body.model)), strippedFields, config);
+  } catch (error) {
+    return anthropicErrorResponse(error);
+  }
+}
+
+export async function handleAnthropicCountTokens(config: AppConfig, request: Request): Promise<Response> {
+  try {
+    authorizeAnthropic(config, request);
+    const rawBody = await readJson(request);
+    const { body } = applyFieldPolicy('anthropic_messages', rawBody, config);
+    const tokenizerRequest = anthropicCountTokensRequest(body, config);
+    const upstream = await upstreamFetch(config, '/tokenize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(tokenizerRequest),
+    });
+    if (upstream.response.status === 404 || upstream.response.status === 501) {
+      throw unsupportedCapabilityError('Token counting is not supported by this local llama.cpp backend');
+    }
+    if (!upstream.response.ok) {
+      throw upstreamError('unavailable', 'Upstream llama server is unavailable');
+    }
+    const payload = await upstream.response.json().catch(() => {
+      throw upstreamError('bad_response', 'Upstream returned invalid token count JSON');
+    });
+    return jsonResponse({ input_tokens: extractTokenCount(payload) });
   } catch (error) {
     return anthropicErrorResponse(error);
   }
@@ -51,7 +77,7 @@ function anthropicRequestToChat(input: JsonObject, config: AppConfig): JsonObjec
   const messages: JsonObject[] = [];
   const system = normalizeSystem(input.system);
   if (system) messages.push({ role: 'system', content: system });
-  messages.push(...normalizeAnthropicMessages(input.messages));
+  messages.push(...normalizeAnthropicMessages(input.messages, config));
 
   const chat: JsonObject = { ...input, messages };
   if (input.stop_sequences !== undefined) chat.stop = input.stop_sequences;
@@ -85,7 +111,7 @@ function normalizeSystem(system: unknown): string | undefined {
   throw new GatewayError(400, 'system must be a string or text block array');
 }
 
-function normalizeAnthropicMessages(messages: unknown): JsonObject[] {
+function normalizeAnthropicMessages(messages: unknown, config: AppConfig): JsonObject[] {
   if (!Array.isArray(messages)) throw new GatewayError(400, 'messages must be an array');
   const out: JsonObject[] = [];
   for (const message of messages) {
@@ -100,7 +126,7 @@ function normalizeAnthropicMessages(messages: unknown): JsonObject[] {
     if (message.role === 'assistant') {
       out.push(normalizeAssistantBlocks(message.content));
     } else {
-      out.push(...normalizeUserBlocks(message.content));
+      out.push(...normalizeUserBlocks(message.content, config));
     }
   }
   return out;
@@ -130,18 +156,26 @@ function normalizeAssistantBlocks(blocks: unknown[]): JsonObject {
   return message;
 }
 
-function normalizeUserBlocks(blocks: unknown[]): JsonObject[] {
+function normalizeUserBlocks(blocks: unknown[], config: AppConfig): JsonObject[] {
   const out: JsonObject[] = [];
   let pendingText: string[] = [];
+  let pendingParts: JsonObject[] = [];
   const flushText = () => {
-    if (pendingText.length > 0) {
-      out.push({ role: 'user', content: pendingText.join('\n') });
+    if (pendingParts.length > 0) {
+      out.push({
+        role: 'user',
+        content: pendingParts.some((part) => part.type !== 'text') ? pendingParts : pendingText.join('\n'),
+      });
       pendingText = [];
+      pendingParts = [];
     }
   };
   for (const block of blocks) {
     if (isObject(block) && block.type === 'text' && typeof block.text === 'string') {
       pendingText.push(block.text);
+      pendingParts.push({ type: 'text', text: block.text });
+    } else if (isImageBlock(block)) {
+      pendingParts.push(normalizeImageBlock(block, config));
     } else if (isObject(block) && block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
       flushText();
       out.push({ role: 'tool', tool_call_id: block.tool_use_id, content: normalizeToolResultContent(block.content) });
@@ -217,7 +251,7 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
         message: { id: messageId, type: 'message', role: 'assistant', content: [], model: chatRequest.model },
       } })));
       let textStarted = false;
-      let toolStarted = false;
+      const startedBlocks = new Set<number>();
       let stopReason = 'end_turn';
       let failed = false;
       try {
@@ -229,6 +263,7 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
           if (typeof content === 'string') {
             if (!textStarted) {
               textStarted = true;
+              startedBlocks.add(0);
               controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_start', data: {
                 type: 'content_block_start',
                 index: 0,
@@ -243,18 +278,19 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
           }
           for (const toolCall of choice?.delta?.tool_calls ?? []) {
             const fn = toolCall.function ?? {};
-            if (!toolStarted && toolCall.id && fn.name) {
-              toolStarted = true;
+            const blockIndex = (textStarted ? 1 : 0) + (typeof toolCall.index === 'number' ? toolCall.index : 0);
+            if (!startedBlocks.has(blockIndex) && toolCall.id && fn.name) {
+              startedBlocks.add(blockIndex);
               controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_start', data: {
                 type: 'content_block_start',
-                index: 0,
+                index: blockIndex,
                 content_block: { type: 'tool_use', id: toolCall.id, name: fn.name, input: {} },
               } })));
             }
             if (typeof fn.arguments === 'string' && fn.arguments.length > 0) {
               controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_delta', data: {
                 type: 'content_block_delta',
-                index: 0,
+                index: blockIndex,
                 delta: { type: 'input_json_delta', partial_json: fn.arguments },
               } })));
             }
@@ -274,8 +310,8 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
           },
         })));
       }
-      if (textStarted || toolStarted) {
-        controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } })));
+      for (const index of [...startedBlocks].sort((a, b) => a - b)) {
+        controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_stop', data: { type: 'content_block_stop', index } })));
       }
       if (!failed) {
         controller.enqueue(encoder.encode(encodeSSE({ event: 'message_delta', data: {
@@ -296,6 +332,57 @@ function mapStopReason(reason: unknown): string {
   if (reason === 'tool_calls' || reason === 'function_call') return 'tool_use';
   if (reason === 'content_filter') return 'stop_sequence';
   return 'end_turn';
+}
+
+function anthropicCountTokensRequest(input: JsonObject, config: AppConfig): JsonObject {
+  if (input.messages === undefined) {
+    throw missingRequiredFieldError('messages');
+  }
+  const parts: string[] = [];
+  const system = normalizeSystem(input.system);
+  if (system) parts.push(system);
+  for (const message of normalizeAnthropicMessages(input.messages, config)) {
+    if (typeof message.content === 'string') {
+      parts.push(message.content);
+      continue;
+    }
+    if (Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (isObject(part) && part.type === 'text' && typeof part.text === 'string') {
+          parts.push(part.text);
+          continue;
+        }
+        throw unsupportedCapabilityError('Token counting for multimodal content is not supported by this local llama.cpp backend');
+      }
+    }
+  }
+  return { content: parts.join('\n') };
+}
+
+function extractTokenCount(payload: unknown): number {
+  if (isObject(payload) && typeof payload.count === 'number') return payload.count;
+  if (isObject(payload) && typeof payload.token_count === 'number') return payload.token_count;
+  if (isObject(payload) && typeof payload.n_tokens === 'number') return payload.n_tokens;
+  if (isObject(payload) && Array.isArray(payload.tokens)) return payload.tokens.length;
+  throw upstreamError('bad_response', 'Upstream returned an unsupported token count shape');
+}
+
+function isImageBlock(block: unknown): block is JsonObject {
+  return isObject(block) && block.type === 'image';
+}
+
+function normalizeImageBlock(block: JsonObject, config: AppConfig): JsonObject {
+  if (!config.upstreamVisionOk) {
+    throw unsupportedCapabilityError('Image content blocks are not supported by this local llama.cpp backend');
+  }
+  const source = isObject(block.source) ? block.source : {};
+  if (source.type === 'base64' && typeof source.media_type === 'string' && typeof source.data === 'string') {
+    return {
+      type: 'image_url',
+      image_url: { url: `data:${source.media_type};base64,${source.data}` },
+    };
+  }
+  throw new GatewayError(400, 'Unsupported image content block', 'invalid_request_error', 'unsupported_parameter');
 }
 
 function anthropicErrorResponse(error: unknown): Response {

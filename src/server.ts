@@ -4,7 +4,7 @@ import { hasValidApiKey } from './auth.ts';
 import { CapabilityRegistry } from './capabilities.ts';
 import type { AppConfig } from './config.ts';
 import { errorResponse, invalidJsonError, jsonResponse, openAIError, requestTooLargeError, unsupportedEndpoint } from './errors.ts';
-import { handleAnthropicMessages } from './anthropic/messages.ts';
+import { handleAnthropicCountTokens, handleAnthropicMessages } from './anthropic/messages.ts';
 import { createChatCompletion, createCompletionShim, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
 import { handleModels } from './openai/models.ts';
 import { createResponse, deleteResponse, getResponse, ResponseStore } from './openai/responses.ts';
@@ -51,6 +51,11 @@ export function createApp(config: AppConfig): App {
       }
       if (request.method === 'POST' && path === '/relay/capabilities/refresh') {
         response = jsonResponse(await capabilities.refresh());
+        return withRequestId(response, requestId);
+      }
+      if (path === '/v1/messages/count_tokens') {
+        if (request.method === 'POST') response = await handleAnthropicCountTokens(config, request);
+        else response = jsonResponse({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, 404);
         return withRequestId(response, requestId);
       }
       if (path === '/v1/messages') {

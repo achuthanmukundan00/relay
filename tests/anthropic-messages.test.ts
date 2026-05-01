@@ -12,6 +12,7 @@ test('POST /v1/messages maps Anthropic request to OpenAI chat and returns Anthro
       assert.equal(req.url, '/v1/chat/completions');
       assert.equal((body as any).model, 'llama');
       assert.equal((body as any).max_tokens, 32);
+      assert.equal((body as any).top_k, 7);
       assert.deepEqual((body as any).stop, ['</stop>']);
       assert.equal((body as any).tool_choice.function.name, 'lookup');
       assert.equal((body as any).tools[0].function.name, 'lookup');
@@ -29,6 +30,7 @@ test('POST /v1/messages maps Anthropic request to OpenAI chat and returns Anthro
       body: {
         model: 'llama',
         max_tokens: 32,
+        top_k: 7,
         system: [{ type: 'text', text: 'Rules' }, { type: 'text', text: 'More rules' }],
         messages: [{ role: 'user', content: 'hello' }],
         stop_sequences: ['</stop>'],
@@ -184,6 +186,45 @@ test('Anthropic streaming converts OpenAI chunks to message events', async () =>
   });
 });
 
+test('POST /v1/messages/count_tokens uses upstream tokenization when available', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async (req, res, body) => {
+      assert.equal(req.url, '/tokenize');
+      assert.deepEqual(body, { content: 'Rules\nHello\nWorld' });
+      sendJson(res, 200, { tokens: [1, 2, 3, 4] });
+    };
+
+    const response = await createApp(testConfig(upstream.url)).fetch('/v1/messages/count_tokens', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        system: 'Rules',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello' }, { type: 'text', text: 'World' }] }],
+      },
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { input_tokens: 4 });
+  });
+});
+
+test('POST /v1/messages/count_tokens returns Anthropic-shaped capability errors when upstream tokenization is unavailable', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => sendJson(res, 404, { error: 'missing' });
+
+    const response = await createApp(testConfig(upstream.url)).fetch('/v1/messages/count_tokens', {
+      method: 'POST',
+      body: { model: 'llama', messages: [{ role: 'user', content: 'Hello' }] },
+    });
+
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.type, 'error');
+    assert.equal(body.error.type, 'invalid_request_error');
+    assert.match(body.error.message, /Token counting/);
+  });
+});
+
 test('Anthropic unknown fields follow the configured field policy', async (t) => {
   await t.test('pass through by default', async () => {
     await withUpstream(async (upstream) => {
@@ -247,6 +288,52 @@ test('Anthropic strips thinking permissively with warning', async () => {
     });
     assert.equal(res.status, 200, await res.text());
     assert.equal(res.headers.get('x-relay-warning'), 'stripped_unsupported_fields');
+  });
+});
+
+test('Anthropic image blocks fail cleanly without multimodal support', async () => {
+  const response = await createApp(testConfig('http://127.0.0.1:9')).fetch('/v1/messages', {
+    method: 'POST',
+    body: {
+      model: 'llama',
+      max_tokens: 4,
+      messages: [{
+        role: 'user',
+        content: [{
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
+        }],
+      }],
+    },
+  });
+
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.equal(body.type, 'error');
+  assert.equal(body.error.type, 'invalid_request_error');
+  assert.match(body.error.message, /Image content blocks/);
+});
+
+test('Anthropic streaming assigns distinct content block indexes for text and multiple tool calls', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\\"q\\":\\"relay\\"}"}},{"index":1,"id":"call_2","type":"function","function":{"name":"write","arguments":"{\\"path\\":\\"a.txt\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n');
+      res.end('data: [DONE]\n\n');
+    };
+
+    const response = await createApp(testConfig(upstream.url)).fetch('/v1/messages', {
+      method: 'POST',
+      body: { model: 'llama', max_tokens: 8, stream: true, messages: [{ role: 'user', content: 'hi' }] },
+    });
+
+    const text = await response.text();
+    assert.match(text, /"index":0,"content_block":\{"type":"text"/);
+    assert.match(text, /"index":1,"content_block":\{"type":"tool_use","id":"call_1"/);
+    assert.match(text, /"index":2,"content_block":\{"type":"tool_use","id":"call_2"/);
+    assert.match(text, /"index":1,"delta":\{"type":"input_json_delta"/);
+    assert.match(text, /"index":2,"delta":\{"type":"input_json_delta"/);
   });
 });
 
