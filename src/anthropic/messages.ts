@@ -2,7 +2,7 @@ import { hasValidApiKey } from '../auth.ts';
 import type { AppConfig } from '../config.ts';
 import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRequiredFieldError, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
-import { encodeSSE, streamHeaders } from '../normalize/stream.ts';
+import { encodeSSE, parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
 
@@ -209,7 +209,6 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
     throw upstream.response.body ? upstreamError('unavailable', 'Upstream llama server is unavailable') : upstreamError('bad_response', 'Upstream returned an empty stream');
   }
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
   const messageId = `msg_${crypto.randomUUID()}`;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -217,23 +216,14 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
         type: 'message_start',
         message: { id: messageId, type: 'message', role: 'assistant', content: [], model: chatRequest.model },
       } })));
-      let buffer = '';
       let textStarted = false;
       let toolStarted = false;
       let stopReason = 'end_turn';
-      const reader = upstream.response.body!.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() ?? '';
-        for (const event of events) {
-          const dataLine = event.split('\n').find((line) => line.startsWith('data: '));
-          if (!dataLine) continue;
-          const data = dataLine.slice('data: '.length);
-          if (data === '[DONE]') continue;
-          const chunk = JSON.parse(data);
+      let failed = false;
+      try {
+        for await (const frame of parseSSEStream(upstream.response.body!)) {
+          if (frame.data === '[DONE]') break;
+          const chunk = parseSSEJson(frame);
           const choice = chunk.choices?.[0];
           const content = choice?.delta?.content;
           if (typeof content === 'string') {
@@ -271,16 +261,30 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
           }
           if (choice?.finish_reason) stopReason = mapStopReason(choice.finish_reason);
         }
+      } catch (error) {
+        failed = true;
+        controller.enqueue(encoder.encode(encodeSSE({
+          event: 'error',
+          data: {
+            type: 'error',
+            error: {
+              type: 'api_error',
+              message: error instanceof Error ? error.message : 'Upstream stream failed',
+            },
+          },
+        })));
       }
       if (textStarted || toolStarted) {
         controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_stop', data: { type: 'content_block_stop', index: 0 } })));
       }
-      controller.enqueue(encoder.encode(encodeSSE({ event: 'message_delta', data: {
-        type: 'message_delta',
-        delta: { stop_reason: stopReason, stop_sequence: null },
-        usage: {},
-      } })));
-      controller.enqueue(encoder.encode(encodeSSE({ event: 'message_stop', data: { type: 'message_stop' } })));
+      if (!failed) {
+        controller.enqueue(encoder.encode(encodeSSE({ event: 'message_delta', data: {
+          type: 'message_delta',
+          delta: { stop_reason: stopReason, stop_sequence: null },
+          usage: {},
+        } })));
+        controller.enqueue(encoder.encode(encodeSSE({ event: 'message_stop', data: { type: 'message_stop' } })));
+      }
       controller.close();
     },
   });

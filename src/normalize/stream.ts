@@ -1,3 +1,5 @@
+import { upstreamError } from '../errors.ts';
+
 export function streamHeaders(): HeadersInit {
   return {
     'content-type': 'text/event-stream',
@@ -11,6 +13,11 @@ export type SSEFrame = {
   data: unknown;
 };
 
+export type ParsedSSEFrame = {
+  event?: string;
+  data: string;
+};
+
 export function encodeSSE(frame: SSEFrame): string {
   const data = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
   return `${frame.event ? `event: ${frame.event}\n` : ''}data: ${data}\n\n`;
@@ -18,22 +25,58 @@ export function encodeSSE(frame: SSEFrame): string {
 
 export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       let sawDone = false;
-      const reader = body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        if (text.includes('data: [DONE]')) sawDone = true;
-        controller.enqueue(value);
+      try {
+        for await (const frame of parseSSEStream(body)) {
+          if (frame.data === '[DONE]') {
+            if (!sawDone) {
+              sawDone = true;
+              controller.enqueue(encoder.encode(encodeSSE({ data: '[DONE]' })));
+            }
+            continue;
+          }
+          const chunk = parseSSEJson(frame, 'Upstream returned invalid streaming JSON');
+          controller.enqueue(encoder.encode(encodeSSE({ event: frame.event, data: chunk })));
+        }
+      } catch {
+        // OpenAI chat streams do not have a clean post-start error frame. Close
+        // the stream with a single done marker instead of leaking malformed SSE.
       }
       if (!sawDone) controller.enqueue(encoder.encode(encodeSSE({ data: '[DONE]' })));
       controller.close();
     },
   });
+}
+
+export async function* parseSSEStream(body: ReadableStream<Uint8Array>): AsyncGenerator<ParsedSSEFrame> {
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = splitFrames(buffer);
+    buffer = frames.remainder;
+    for (const block of frames.complete) {
+      const frame = parseSSEBlock(block);
+      if (frame) yield frame;
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim().length > 0) {
+    throw upstreamError('stream_interrupted', 'Upstream stream ended mid-frame');
+  }
+}
+
+export function parseSSEJson(frame: ParsedSSEFrame, message = 'Upstream returned invalid streaming JSON'): any {
+  try {
+    return JSON.parse(frame.data);
+  } catch {
+    throw upstreamError('bad_response', message);
+  }
 }
 
 export function anthropicEventsToOpenAIChunks(events: Array<{ event: string; data: any }>): string[] {
@@ -74,4 +117,38 @@ function openAIStopReason(reason: unknown): string {
   if (reason === 'tool_use') return 'tool_calls';
   if (reason === 'stop_sequence') return 'stop';
   return 'stop';
+}
+
+function splitFrames(buffer: string): { complete: string[]; remainder: string } {
+  const complete: string[] = [];
+  let start = 0;
+  for (let index = 0; index < buffer.length - 1; index++) {
+    if (buffer[index] === '\n' && buffer[index + 1] === '\n') {
+      complete.push(buffer.slice(start, index));
+      start = index + 2;
+      index += 1;
+    }
+  }
+  return {
+    complete,
+    remainder: buffer.slice(start),
+  };
+}
+
+function parseSSEBlock(block: string): ParsedSSEFrame | undefined {
+  let event: string | undefined;
+  const data: string[] = [];
+  for (const rawLine of block.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    if (line.length === 0 || line.startsWith(':')) continue;
+    if (line.startsWith('event:')) {
+      event = line.slice('event:'.length).trim();
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      data.push(line.slice('data:'.length).trimStart());
+    }
+  }
+  if (data.length === 0) return undefined;
+  return { event, data: data.join('\n') };
 }

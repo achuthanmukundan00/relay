@@ -2,7 +2,7 @@ import type { AppConfig } from '../config.ts';
 import { GatewayError, invalidRequestError, jsonResponse, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
-import { streamHeaders } from '../normalize/stream.ts';
+import { parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
 import { normalizeTools } from '../normalize/tools.ts';
 import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
 
@@ -140,7 +140,6 @@ async function streamResponse(config: AppConfig, chatRequest: JsonObject): Promi
 
   const responseId = `resp_${crypto.randomUUID()}`;
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       controller.enqueue(encoder.encode(sse('response.created', {
@@ -154,20 +153,11 @@ async function streamResponse(config: AppConfig, chatRequest: JsonObject): Promi
           output: [],
         },
       })));
-      let buffer = '';
-      const reader = upstream.response.body!.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() ?? '';
-        for (const event of events) {
-          const dataLine = event.split('\n').find((line) => line.startsWith('data: '));
-          if (!dataLine) continue;
-          const data = dataLine.slice('data: '.length);
-          if (data === '[DONE]') continue;
-          const chunk = JSON.parse(data);
+      let failed = false;
+      try {
+        for await (const frame of parseSSEStream(upstream.response.body!)) {
+          if (frame.data === '[DONE]') break;
+          const chunk = parseSSEJson(frame);
           const delta = chunk.choices?.[0]?.delta;
           if (typeof delta?.content === 'string') {
             controller.enqueue(encoder.encode(sse('response.output_text.delta', {
@@ -179,11 +169,20 @@ async function streamResponse(config: AppConfig, chatRequest: JsonObject): Promi
             })));
           }
         }
+      } catch (error) {
+        failed = true;
+        controller.enqueue(encoder.encode(sse('response.failed', {
+          type: 'response.failed',
+          response: { id: responseId, object: 'response', status: 'failed' },
+          error: { message: error instanceof Error ? error.message : 'Upstream stream failed' },
+        })));
       }
-      controller.enqueue(encoder.encode(sse('response.completed', {
-        type: 'response.completed',
-        response: { id: responseId, object: 'response', status: 'completed' },
-      })));
+      if (!failed) {
+        controller.enqueue(encoder.encode(sse('response.completed', {
+          type: 'response.completed',
+          response: { id: responseId, object: 'response', status: 'completed' },
+        })));
+      }
       controller.close();
     },
   });

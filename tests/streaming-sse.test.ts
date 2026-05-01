@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import test from 'node:test';
 
 import type { AppConfig } from '../src/config.ts';
-import { encodeSSE, anthropicEventsToOpenAIChunks } from '../src/normalize/stream.ts';
+import { anthropicEventsToOpenAIChunks, encodeSSE, parseSSEStream } from '../src/normalize/stream.ts';
 import { createApp } from '../src/server.ts';
 
 test('encodeSSE emits provider-compatible SSE frames', () => {
@@ -30,6 +30,45 @@ test('OpenAI streaming appends DONE when upstream disconnects without it', async
   });
 });
 
+test('shared SSE parser handles frames split across network reads', async () => {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"hel'));
+      controller.enqueue(encoder.encode('lo":"world"}\n\n'));
+      controller.enqueue(encoder.encode('data: [DO'));
+      controller.enqueue(encoder.encode('NE]\n\n'));
+      controller.close();
+    },
+  });
+
+  const frames: Array<{ event?: string; data: string }> = [];
+  for await (const frame of parseSSEStream(body)) frames.push(frame);
+
+  assert.deepEqual(frames, [
+    { event: undefined, data: '{"hello":"world"}' },
+    { event: undefined, data: '[DONE]' },
+  ]);
+});
+
+test('OpenAI streaming emits DONE only once when upstream duplicates it', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end('data: [DONE]\n\n');
+    };
+    const response = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: { model: 'llama', stream: true, messages: [{ role: 'user', content: 'hi' }] },
+    });
+
+    const text = await response.text();
+    assert.equal((text.match(/data: \[DONE\]/g) ?? []).length, 1);
+  });
+});
+
 test('Anthropic streaming preserves tool call argument chunks as input_json_delta', async () => {
   await withUpstream(async (upstream) => {
     upstream.handler = (_req, res) => {
@@ -50,6 +89,46 @@ test('Anthropic streaming preserves tool call argument chunks as input_json_delt
     assert.match(text, /"type":"input_json_delta","partial_json":"{\\\"query\\\""/);
     assert.match(text, /"type":"input_json_delta","partial_json":":\\\"relay\\\"}"/);
     assert.doesNotMatch(text, /\[DONE\]/);
+  });
+});
+
+test('Responses streaming emits response.failed on malformed upstream JSON after stream start', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
+      res.end('data: {"id":\n\n');
+    };
+
+    const response = await createApp(testConfig(upstream.url)).fetch('/v1/responses', {
+      method: 'POST',
+      body: { model: 'llama', input: 'hi', stream: true },
+    });
+
+    const text = await response.text();
+    assert.match(text, /event: response\.output_text\.delta/);
+    assert.match(text, /event: response\.failed/);
+    assert.doesNotMatch(text, /event: response\.completed/);
+  });
+});
+
+test('Anthropic streaming emits error event on malformed upstream JSON after stream start', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
+      res.end('data: {"id":\n\n');
+    };
+
+    const response = await createApp(testConfig(upstream.url)).fetch('/v1/messages', {
+      method: 'POST',
+      body: { model: 'llama', max_tokens: 4, stream: true, messages: [{ role: 'user', content: 'hi' }] },
+    });
+
+    const text = await response.text();
+    assert.match(text, /event: content_block_delta/);
+    assert.match(text, /event: error/);
+    assert.doesNotMatch(text, /event: message_stop/);
   });
 });
 
