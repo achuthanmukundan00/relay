@@ -1,92 +1,114 @@
 # Relay
 
-Relay is a lightweight local agent gateway for llama.cpp. It exposes OpenAI-compatible and Anthropic-compatible HTTP APIs in front of a running `llama-server`.
+<p align="center">
+  <img src="relay_logo_github.png" alt="Relay" width="120" />
+</p>
 
-## What This Is
+<p align="center">
+  A lightweight OpenAI/Anthropic-compatible gateway for local llama.cpp models.
+</p>
 
-Relay is a compatibility gateway, not an inference engine. It does not load models, run sampling, or replace llama.cpp. It accepts the endpoint shapes used by agent tools, normalizes them to the best-supported llama.cpp `/v1/chat/completions` request, and translates responses back into the provider shape the client expects.
+Relay is a small local compatibility layer. It sits in front of a running `llama-server`, accepts a focused subset of OpenAI and Anthropic client traffic, normalizes the request shape, and sends the work upstream.
 
-By default Relay listens on `127.0.0.1:1234` and proxies to the llama.cpp upstream on `http://127.0.0.1:8080/v1`.
+## What Relay Is
 
-## Why It Exists
+- a local HTTP gateway
+- an OpenAI Chat/Completions/Responses compatibility layer
+- an Anthropic Messages compatibility layer
+- a thin adapter for a running `llama.cpp` server
+- a repo that prefers explicit behavior, small modules, and behavior tests over provider cosplay
 
-Local agents often speak slightly different OpenAI or Anthropic dialects. llama.cpp is close to OpenAI-compatible, but tools can still trip over fields like `developer` messages, `max_completion_tokens`, Anthropic `tool_use` blocks, Responses API probes, or provider-specific stream formats. Relay smooths over those differences so tools such as Cline, Continue, Aider, OpenCode-style clients, Pi-style clients, and Claude-Code-style Anthropic clients can point at one local gateway.
+## What Relay Is Not
+
+- not a model runner
+- not a hosted inference service
+- not a UI
+- not a replacement for `llama.cpp`
+- not a guarantee of full hosted OpenAI or Anthropic feature parity
+- not an embeddings, rerank, realtime, assistants, or vector-store implementation
+
+## Architecture
+
+```text
+agent / SDK client
+        |
+        v
+Relay on 127.0.0.1:1234
+        |
+        v
+llama.cpp llama-server on 127.0.0.1:8080/v1
+        |
+        v
+local GGUF model
+```
+
+## Current Scope
+
+Implemented Relay surfaces:
+
+- `GET /health`
+- `GET /v1/models`
+- `GET /v1/models/:model`
+- `POST /v1/chat/completions`
+- `POST /v1/completions`
+- stored chat completion helpers under `/v1/chat/completions/:id*`
+- `POST /v1/responses`
+- `GET /v1/responses/:id`
+- `DELETE /v1/responses/:id`
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`
+- `GET /relay/capabilities`
+- `POST /relay/capabilities/refresh`
+
+Unsupported or intentionally out of scope:
+
+- `/v1/embeddings`
+- rerank APIs
+- hosted tools such as web search, file search, code interpreter, and computer use
+- `/v1/images/*`
+- `/v1/audio/*`
+- `/v1/files`
+- `/v1/batches`
+- `/v1/fine_tuning/*`
+- `/v1/vector_stores/*`
+- `/v1/assistants/*`
+- `/v1/threads/*`
+- `/v1/realtime/*`
+
+## Base URLs
+
+- OpenAI-compatible base URL: `http://127.0.0.1:1234/v1`
+- Anthropic-compatible base URL: `http://127.0.0.1:1234`
+- llama.cpp upstream base URL: `http://127.0.0.1:8080/v1`
+
+Anthropic SDKs should use the Relay base URL, not `.../v1/messages`. The SDK appends the messages path itself.
 
 ## Quick Start
 
-With Node 25 and a llama.cpp server already running, a fresh user can run the gateway in under five minutes:
+1. Start `llama-server`:
 
-```sh
-git clone <this-repo-url> relay
-cd relay
-cp .env.example .env
+```bash
+llama-server --model /path/to/model.gguf --host 127.0.0.1 --port 8080
+```
+
+2. Install and start Relay:
+
+```bash
+npm install
 npm test
 npm start
 ```
 
-In another terminal, run the smoke tests below. If you set `API_KEY`, add `-H "Authorization: Bearer $API_KEY"` or `-H "x-api-key: $API_KEY"` to API requests.
+3. Check the local stack:
 
-## Supported Endpoints
-
-- GET `/health`
-- GET `/v1/models`
-- GET `/v1/models/:model`
-- POST `/v1/chat/completions`
-- POST `/v1/completions`
-- GET `/v1/chat/completions`
-- GET `/v1/chat/completions/:completion_id`
-- POST `/v1/chat/completions/:completion_id`
-- DELETE `/v1/chat/completions/:completion_id`
-- GET `/v1/chat/completions/:completion_id/messages`
-- POST `/v1/responses`
-- GET `/v1/responses/:id`
-- DELETE `/v1/responses/:id`
-- POST `/v1/messages`
-
-## Unsupported Endpoints
-
-- OpenAI Embeddings passthrough is not implemented yet.
-- Audio, image, and file modalities are rejected unless the local upstream explicitly supports the requested path.
-- Batch, fine-tuning, assistants, vector stores, realtime, and hosted tool endpoints are not implemented.
-- Relay does not provide model inference, model downloads, model routing, or database persistence.
-
-## llama.cpp Setup Example
-
-Final local port topology:
-
-- Relay listens on `127.0.0.1:1234`.
-- llama.cpp upstream listens on `127.0.0.1:8080`.
-- OpenAI-compatible agents use `http://127.0.0.1:1234/v1`.
-- Anthropic-compatible clients use `http://127.0.0.1:1234/v1/messages`.
-
-Start `llama-server` on the upstream port:
-
-```sh
-llama-server \
-  --model /path/to/model.gguf \
-  --host 127.0.0.1 \
-  --port 8080
-```
-
-One-line equivalent:
-
-```sh
-llama-server --model /path/to/model.gguf --host 127.0.0.1 --port 8080
-```
-
-Then start Relay:
-
-```sh
-PORT=1234 UPSTREAM_BASE_URL=http://127.0.0.1:8080/v1 npm start
-```
-
-## Smoke Tests
-
-```sh
+```bash
 curl http://127.0.0.1:1234/health
-
 curl http://127.0.0.1:1234/v1/models
+```
 
+4. Send a chat completion:
+
+```bash
 curl -X POST http://127.0.0.1:1234/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -96,19 +118,111 @@ curl -X POST http://127.0.0.1:1234/v1/chat/completions \
   }'
 ```
 
-Helper scripts are available for the local Relay-on-1234 and llama.cpp-on-8080 stack:
+## Configuration
 
-```sh
-./scripts/check-local-stack.sh
-./scripts/smoke-openai.sh
-./scripts/smoke-anthropic.sh
+Relay reads these environment variables:
+
+| Variable | Default |
+|---|---|
+| `HOST` | `127.0.0.1` |
+| `PORT` | `1234` |
+| `UPSTREAM_BASE_URL` | `http://127.0.0.1:8080/v1` |
+| `DEFAULT_MODEL` | empty |
+| `DEFAULT_TEMPERATURE` | `1.0` |
+| `DEFAULT_TOP_P` | `0.95` |
+| `DEFAULT_TOP_K` | `20` |
+| `DEFAULT_MIN_P` | `0.0` |
+| `DEFAULT_PRESENCE_PENALTY` | `1.5` |
+| `DEFAULT_REPETITION_PENALTY` | `1.0` |
+| `REQUEST_TIMEOUT_SECONDS` | `600` |
+| `MAX_REQUEST_BODY_BYTES` | `1048576` |
+| `RELAY_PROBE_ON_STARTUP` | `true` |
+| `RELAY_STRICT_STARTUP` | `false` |
+| `RELAY_PROBE_TIMEOUT_MS` | `3000` |
+| `RELAY_UNKNOWN_FIELD_POLICY` | `pass_through` |
+| `RELAY_STRICT_COMPAT` | `false` |
+| `RELAY_WARN_ON_STRIPPED_FIELDS` | `true` |
+| `LOG_LEVEL` | `info` |
+| `API_KEY` | empty |
+
+See [.env.example](/home/achu/relay/.env.example) for the repo-default file.
+
+## API Examples
+
+OpenAI-compatible models:
+
+```bash
+curl http://127.0.0.1:1234/v1/models
 ```
 
-## Client Examples
+OpenAI-compatible Responses:
 
-### Cline
+```bash
+curl -X POST http://127.0.0.1:1234/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "input": "Say OK",
+    "store": false
+  }'
+```
 
-Use OpenAI-compatible mode and point the base URL at Relay:
+Anthropic-compatible Messages:
+
+```bash
+curl -X POST http://127.0.0.1:1234/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "local",
+    "max_tokens": 16,
+    "messages": [{"role": "user", "content": "Say OK"}]
+  }'
+```
+
+Anthropic-compatible `count_tokens`:
+
+```bash
+curl -X POST http://127.0.0.1:1234/v1/messages/count_tokens \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Count these tokens."}]
+  }'
+```
+
+## Client Setup
+
+### OpenAI SDK
+
+```js
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  apiKey: process.env.API_KEY ?? 'local',
+  baseURL: 'http://127.0.0.1:1234/v1',
+});
+```
+
+### Anthropic SDK
+
+```js
+import Anthropic from '@anthropic-ai/sdk';
+
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY ?? 'local',
+  baseURL: 'http://127.0.0.1:1234',
+});
+```
+
+### OpenAI-Compatible Clients
+
+- Cline/OpenCode-style clients: use `http://127.0.0.1:1234/v1`
+- Aider: set `OPENAI_API_BASE=http://127.0.0.1:1234/v1`
+- Continue: use an OpenAI provider pointed at `http://127.0.0.1:1234/v1`
+
+Example snippets still used in the repo tests:
 
 ```json
 {
@@ -118,10 +232,6 @@ Use OpenAI-compatible mode and point the base URL at Relay:
   "model": "local"
 }
 ```
-
-### Continue
-
-Add an OpenAI-compatible model entry:
 
 ```json
 {
@@ -137,108 +247,47 @@ Add an OpenAI-compatible model entry:
 }
 ```
 
-### Aider
-
-Point Aider at the OpenAI-compatible base URL:
-
-```sh
-export OPENAI_API_KEY=local-or-your-API_KEY
-export OPENAI_API_BASE=http://127.0.0.1:1234/v1
-aider --model openai/local
-```
-
-An `.aider.conf.yml` equivalent:
-
 ```yaml
 openai_api_base: http://127.0.0.1:1234/v1
 model: openai/local
 ```
 
-### OpenAI SDK
+## Compatibility Caveats
 
-```js
-import OpenAI from 'openai';
-
-const client = new OpenAI({
-  apiKey: process.env.API_KEY ?? 'local',
-  baseURL: 'http://127.0.0.1:1234/v1',
-});
-
-const completion = await client.chat.completions.create({
-  model: 'local',
-  messages: [{ role: 'user', content: 'Say OK' }],
-});
-
-console.log(completion.choices[0].message.content);
-```
-
-### Claude-Code-Style Anthropic Clients
-
-Use Relay as the Anthropic base URL and any local key unless `API_KEY` is configured:
-
-```sh
-export ANTHROPIC_BASE_URL=http://127.0.0.1:1234
-export ANTHROPIC_API_KEY=local-or-your-API_KEY
-```
-
-Relay accepts `x-api-key` and `Authorization: Bearer ...`; it does not require a real Anthropic key.
-
-## Security Notes
-
-- If `API_KEY` is unset, Relay allows unauthenticated local use.
-- If `API_KEY` is set, requests must include `Authorization: Bearer <key>` or `x-api-key: <key>`.
-- HTTP request bodies are capped by `MAX_REQUEST_BODY_BYTES` and default to 1 MiB.
-- Logs include request IDs and sanitized errors, not full prompts or API keys.
-- Keep `HOST=127.0.0.1` for local-only use. Set `HOST=0.0.0.0` only when you intentionally want LAN or container exposure.
-- Relay is intended for trusted local networks. Put a real reverse proxy and TLS in front of it before exposing it beyond your machine.
-
-## Troubleshooting
-
-- `GET /health` works but completions fail: confirm `llama-server` is running and `UPSTREAM_BASE_URL` points to it.
-- `GET /v1/models` returns a gateway error: start llama.cpp with its OpenAI-compatible server enabled, or set `DEFAULT_MODEL` for synthetic discovery.
-- The client gets `401`: check `API_KEY`, `Authorization`, and `x-api-key` values.
-- Tool calls fail: inspect whether the upstream returned valid JSON function arguments.
-- Anthropic clients stream oddly: confirm the client is pointed at `http://127.0.0.1:1234`, not `/v1`, for `/v1/messages`.
-- LAN clients cannot connect: set `HOST=0.0.0.0`, restart Relay, and verify firewall rules.
+- The test suite is mostly mocked handler coverage.
+- Real SDK smoke scripts live under `scripts/compat/`.
+- Manual client smoke steps live in [docs/manual-smoke-testing.md](/home/achu/relay/docs/manual-smoke-testing.md).
+- The compatibility status table lives in [docs/compatibility-matrix.md](/home/achu/relay/docs/compatibility-matrix.md).
+- Continue-style embeddings workflows are still out of scope because embeddings are not implemented.
+- Vision should be treated as unproven unless you explicitly configure and test it against your local upstream.
 
 ## Development
 
-```sh
+```bash
+npm install
 npm test
 npm start
 ```
 
 ## Deployment
 
-Copy `.env.example` and adjust it for your machine. Keep `HOST=127.0.0.1` for local-only use. Set `HOST=0.0.0.0` only when you intentionally want LAN or container exposure.
+Relay listens on `127.0.0.1:1234`.
 
-### Local systemd deployment
+llama.cpp upstream listens on `127.0.0.1:8080`.
 
-Use [docs/deploy-systemd.md](docs/deploy-systemd.md) for the full two-service path:
+The repo includes Docker and systemd examples, but nothing modifies `/etc` or systemd unless you explicitly run those scripts yourself.
 
-- llama.cpp `llama-server` on `127.0.0.1:8080`.
-- Relay on `127.0.0.1:1234`.
-- clients point to Relay, not llama.cpp.
+- Docker Compose: `docker compose up --build`
+- systemd docs: [docs/deploy-systemd.md](/home/achu/relay/docs/deploy-systemd.md)
+- local smoke helpers: `scripts/check-local-stack.sh`, `scripts/smoke-openai.sh`, `scripts/smoke-anthropic.sh`
 
-Review generated files locally before installing:
+## Security Notes
 
-```sh
-./scripts/render-systemd.sh
-```
+- If `API_KEY` is unset, Relay allows unauthenticated local use.
+- If `API_KEY` is set, requests must include `Authorization: Bearer <key>` or `x-api-key: <key>`.
+- Request bodies are capped by `MAX_REQUEST_BODY_BYTES`.
+- Keep `HOST=127.0.0.1` for local-only use unless you intentionally want LAN exposure.
 
-### Docker Compose
+## License
 
-The compose file builds the gateway image, exposes `1234:1234`, and points `UPSTREAM_BASE_URL` at the host llama.cpp `/v1` API on port 8080 by default.
-
-```sh
-cp .env.example .env
-docker compose up --build
-```
-
-### systemd
-
-Repo-provided systemd examples and helper scripts are documented in [docs/deploy-systemd.md](docs/deploy-systemd.md). The scripts touch `/etc` and systemd only when you manually review and run them.
-
-## Agent Notes
-
-See [docs/agents.md](docs/agents.md) for Cline/Pi/Codex-style client base URLs and coding-agent sampling guidance.
+Apache-2.0. See [LICENSE](/home/achu/relay/LICENSE).
