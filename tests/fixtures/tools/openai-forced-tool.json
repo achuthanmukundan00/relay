@@ -1,0 +1,25 @@
+{
+  "model": "llama",
+  "messages": [
+    { "role": "user", "content": "Always inspect the repository first." }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a file from the workspace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "start_line": { "type": "number" },
+            "include_hidden": { "type": "boolean" }
+          },
+          "required": ["path"]
+        }
+      }
+    }
+  ],
+  "tool_choice": { "type": "function", "function": { "name": "read_file" } }
+}

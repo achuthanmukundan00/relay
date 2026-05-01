@@ -1,0 +1,20 @@
+{
+  "model": "llama",
+  "max_tokens": 64,
+  "messages": [
+    {
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "Searching" },
+        { "type": "tool_use", "id": "toolu_search_1", "name": "search", "input": { "query": "relay" } }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_search_1", "content": "README.md" },
+        { "type": "tool_result", "tool_use_id": "toolu_search_2", "content": [{ "type": "text", "text": "docs/agents.md" }] }
+      ]
+    }
+  ]
+}

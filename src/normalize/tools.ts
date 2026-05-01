@@ -3,25 +3,15 @@ import { GatewayError, upstreamError } from '../errors.ts';
 type JsonObject = Record<string, any>;
 
 export function normalizeTools(body: JsonObject): void {
-  if (Array.isArray(body.tools)) {
-    for (const [index, tool] of body.tools.entries()) {
-      if (!isObject(tool)) {
-        throw new GatewayError(400, `tools[${index}] must be an object`);
-      }
-      if (tool.type === 'custom') {
-        throw new GatewayError(400, 'custom tools are not supported by this upstream', 'invalid_request_error', 'unsupported_tool_type');
-      }
-      if (tool.type !== 'function' || !isObject(tool.function) || typeof tool.function.name !== 'string') {
-        throw new GatewayError(400, `tools[${index}] must be a function tool`);
-      }
-    }
-  }
-
   if (!body.tools && Array.isArray(body.functions)) {
     body.tools = body.functions.map((fn: unknown) => ({
       type: 'function',
       function: fn,
     }));
+  }
+
+  if (Array.isArray(body.tools)) {
+    body.tools.forEach(validateFunctionTool);
   }
 
   if (body.function_call !== undefined && body.tool_choice === undefined) {
@@ -41,6 +31,21 @@ export function normalizeTools(body: JsonObject): void {
 
   delete body.functions;
   delete body.function_call;
+}
+
+function validateFunctionTool(tool: unknown, index: number): void {
+  if (!isObject(tool)) {
+    throw new GatewayError(400, `tools[${index}] must be an object`);
+  }
+  if (tool.type === 'custom') {
+    throw new GatewayError(400, 'custom tools are not supported by this upstream', 'invalid_request_error', 'unsupported_tool_type');
+  }
+  if (tool.type !== 'function' || !isObject(tool.function) || typeof tool.function.name !== 'string' || tool.function.name.length === 0) {
+    throw new GatewayError(400, `tools[${index}] must be a function tool`);
+  }
+  if (tool.function.parameters !== undefined && !isObject(tool.function.parameters)) {
+    throw new GatewayError(400, `tools[${index}].function.parameters must be an object`, 'invalid_request_error', 'invalid_tool_schema');
+  }
 }
 
 function normalizeToolChoice(toolChoice: unknown): unknown {

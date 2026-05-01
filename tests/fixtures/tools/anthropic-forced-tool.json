@@ -1,0 +1,20 @@
+{
+  "model": "llama",
+  "max_tokens": 64,
+  "messages": [
+    { "role": "user", "content": "Read README.md." }
+  ],
+  "tools": [
+    {
+      "name": "read_file",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" }
+        },
+        "required": ["path"]
+      }
+    }
+  ],
+  "tool_choice": { "type": "tool", "name": "read_file" }
+}

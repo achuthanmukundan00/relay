@@ -1,0 +1,20 @@
+{
+  "model": "llama",
+  "messages": [
+    { "role": "user", "content": "Use the old function-calling shape." }
+  ],
+  "functions": [
+    {
+      "name": "lookup_symbol",
+      "description": "Look up a symbol.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" }
+        },
+        "required": ["symbol"]
+      }
+    }
+  ],
+  "function_call": { "name": "lookup_symbol" }
+}

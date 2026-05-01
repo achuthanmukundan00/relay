@@ -1,0 +1,24 @@
+{
+  "model": "llama",
+  "messages": [
+    { "role": "user", "content": "Check the weather in Toronto." }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Look up current weather.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": { "type": "string" },
+            "unit": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto"
+}

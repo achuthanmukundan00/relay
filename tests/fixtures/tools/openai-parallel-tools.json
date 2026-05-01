@@ -1,0 +1,42 @@
+{
+  "model": "llama",
+  "messages": [
+    { "role": "user", "content": "Search and inspect matching files." }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string" },
+            "paths": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["query"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "options": {
+              "type": "object",
+              "properties": {
+                "max_bytes": { "type": "number" }
+              }
+            }
+          },
+          "required": ["path"]
+        }
+      }
+    }
+  ],
+  "parallel_tool_calls": true
+}

@@ -1,0 +1,34 @@
+{
+  "model": "llama",
+  "messages": [
+    { "role": "user", "content": "Find relay docs." },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_search_1",
+          "type": "function",
+          "function": { "name": "search", "arguments": "{\"query\":\"relay docs\"}" }
+        }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "call_search_1", "content": "[\"README.md\"]" },
+    { "role": "user", "content": "Summarize the result." }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string" }
+          },
+          "required": ["query"]
+        }
+      }
+    }
+  ]
+}

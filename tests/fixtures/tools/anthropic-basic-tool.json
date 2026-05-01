@@ -1,0 +1,21 @@
+{
+  "model": "llama",
+  "max_tokens": 64,
+  "messages": [
+    { "role": "user", "content": "Search for Relay." }
+  ],
+  "tools": [
+    {
+      "name": "search",
+      "description": "Search the workspace.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" }
+        },
+        "required": ["query"]
+      }
+    }
+  ],
+  "tool_choice": { "type": "auto" }
+}
