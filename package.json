@@ -5,9 +5,16 @@
   "private": true,
   "scripts": {
     "start": "node --experimental-strip-types src/main.ts",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "smoke:all": "node --experimental-strip-types scripts/smoke-all.ts",
+    "doctor": "node --experimental-strip-types scripts/doctor.ts"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
   }
 }

@@ -164,6 +164,12 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     logLevel: 'silent',
     completionTtlMs: 3_600_000,
     maxRequestBodyBytes: 1_048_576,
+    probeOnStartup: true,
+    strictStartup: false,
+    probeTimeoutMs: 3_000,
+    unknownFieldPolicy: 'pass_through',
+    strictCompat: false,
+    warnOnStrippedFields: true,
   };
 }
 
