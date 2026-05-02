@@ -41,6 +41,24 @@ test('OPTIONS returns CORS-friendly probe response', async () => {
   });
 });
 
+test('OPTIONS reflects requested custom headers for tunnel and browser clients', async () => {
+  await withUpstream(async (upstream) => {
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'OPTIONS',
+      headers: {
+        'access-control-request-headers': 'cf-access-client-id, cf-access-client-secret, content-type',
+      },
+    });
+
+    assert.equal(res.status, 204);
+    const allowed = res.headers.get('access-control-allow-headers') ?? '';
+    assert.match(allowed, /cf-access-client-id/);
+    assert.match(allowed, /cf-access-client-secret/);
+    assert.match(allowed, /content-type/);
+    assert.match(allowed, /authorization/);
+  });
+});
+
 test('GET /v1/models passes through upstream model list', async () => {
   await withUpstream(async (upstream) => {
     upstream.handler = (req, res) => {
@@ -668,6 +686,20 @@ test('upstream unavailable and timeout map to OpenAI-shaped gateway errors', asy
     });
   });
 
+  await t.test('upstream detail is preserved when upstream returns an explicit error message', async () => {
+    await withUpstream(async (upstream) => {
+      upstream.handler = (_req, res) => sendJson(res, 500, { error: { message: 'Context size has been exceeded.' } });
+      const res = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+        method: 'POST',
+        body: { model: 'llama', messages: [{ role: 'user', content: 'hello' }] },
+      });
+      assert.equal(res.status, 502);
+      const body = await res.json();
+      assert.equal(body.error.message, 'Context size has been exceeded.');
+      assert.equal(body.error.code, 'upstream_unavailable');
+    });
+  });
+
   await t.test('timeout', async () => {
     await withUpstream(async (upstream) => {
       upstream.handler = async (_req, res) => {
@@ -709,6 +741,12 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     logLevel: 'info',
     completionTtlMs: 3_600_000,
     maxRequestBodyBytes: 1_048_576,
+    probeOnStartup: true,
+    strictStartup: false,
+    probeTimeoutMs: 3_000,
+    unknownFieldPolicy: 'pass_through',
+    strictCompat: false,
+    warnOnStrippedFields: true,
   };
 }
 

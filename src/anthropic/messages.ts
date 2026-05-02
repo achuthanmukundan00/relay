@@ -4,7 +4,7 @@ import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRe
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { encodeSSE, parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
-import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
+import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
 
 type JsonObject = Record<string, any>;
 
@@ -41,7 +41,7 @@ export async function handleAnthropicCountTokens(config: AppConfig, request: Req
       throw unsupportedCapabilityError('Token counting is not supported by this local llama.cpp backend');
     }
     if (!upstream.response.ok) {
-      throw upstreamError('unavailable', 'Upstream llama server is unavailable');
+      throw await upstreamHttpError(upstream.response);
     }
     const payload = await upstream.response.json().catch(() => {
       throw upstreamError('bad_response', 'Upstream returned invalid token count JSON');
@@ -240,7 +240,7 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
     body: JSON.stringify(chatRequest),
   });
   if (!upstream.response.ok || !upstream.response.body) {
-    throw upstream.response.body ? upstreamError('unavailable', 'Upstream llama server is unavailable') : upstreamError('bad_response', 'Upstream returned an empty stream');
+    throw upstream.response.body ? await upstreamHttpError(upstream.response) : upstreamError('bad_response', 'Upstream returned an empty stream');
   }
   const encoder = new TextEncoder();
   const messageId = `msg_${crypto.randomUUID()}`;

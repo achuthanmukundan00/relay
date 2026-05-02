@@ -14,7 +14,7 @@ export async function upstreamJson(config: AppConfig, path: string, init: Reques
     },
   });
   if (!result.response.ok) {
-    throw upstreamError('unavailable', 'Upstream llama server is unavailable');
+    throw await upstreamHttpError(result.response);
   }
   try {
     return await result.response.json();
@@ -42,9 +42,47 @@ export async function upstreamFetch(config: AppConfig, path: string, init: Reque
   }
 }
 
+export async function upstreamHttpError(response: Response) {
+  const detail = await readUpstreamErrorDetail(response);
+  return upstreamError('unavailable', detail ?? `Upstream llama server returned HTTP ${response.status}`);
+}
+
 function upstreamUrl(baseUrl: string, path: string): string {
   if (baseUrl.endsWith('/v1') && path.startsWith('/v1/')) {
     return `${baseUrl}${path.slice('/v1'.length)}`;
   }
   return `${baseUrl}${path}`;
+}
+
+async function readUpstreamErrorDetail(response: Response): Promise<string | undefined> {
+  const contentType = response.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    try {
+      const payload = await response.json();
+      const message = extractMessage(payload);
+      if (message) return message;
+    } catch {
+      return undefined;
+    }
+  }
+
+  try {
+    const text = (await response.text()).trim();
+    return text ? text.slice(0, 500) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractMessage(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.message === 'string' && record.message.trim()) return record.message.trim();
+  if (typeof record.error === 'string' && record.error.trim()) return record.error.trim();
+  if (record.error && typeof record.error === 'object') {
+    const nested = record.error as Record<string, unknown>;
+    if (typeof nested.message === 'string' && nested.message.trim()) return nested.message.trim();
+  }
+  return undefined;
 }

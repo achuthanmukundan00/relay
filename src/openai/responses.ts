@@ -5,7 +5,7 @@ import { normalizeMessages } from '../normalize/messages.ts';
 import { parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
 import { normalizeTools } from '../normalize/tools.ts';
 import { normalizeOpenAIResponseFormat } from './response-format.ts';
-import { upstreamFetch, upstreamJson } from '../upstream/llama.ts';
+import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
 
 type JsonObject = Record<string, any>;
 
@@ -146,7 +146,7 @@ async function streamResponse(config: AppConfig, chatRequest: JsonObject): Promi
     body: JSON.stringify(chatRequest),
   });
   if (!upstream.response.ok || !upstream.response.body) {
-    throw upstream.response.body ? upstreamError('unavailable', 'Upstream llama server is unavailable') : upstreamError('bad_response', 'Upstream returned an empty stream');
+    throw upstream.response.body ? await upstreamHttpError(upstream.response) : upstreamError('bad_response', 'Upstream returned an empty stream');
   }
 
   const responseId = `resp_${crypto.randomUUID()}`;

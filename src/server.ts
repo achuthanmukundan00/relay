@@ -31,7 +31,7 @@ export function createApp(config: AppConfig): App {
       const path = url.pathname;
       let response: Response;
       if (request.method === 'OPTIONS') {
-        return withRequestId(optionsResponse(), requestId);
+        return withRequestId(optionsResponse(request), requestId);
       }
       if (request.method === 'GET' && path === '/') {
         response = jsonResponse({
@@ -174,16 +174,35 @@ export function createApp(config: AppConfig): App {
   };
 }
 
-function optionsResponse(): Response {
+function optionsResponse(request: Request): Response {
   return new Response(null, {
     status: 204,
     headers: {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET,POST,DELETE,OPTIONS',
-      'access-control-allow-headers': 'authorization,content-type,x-api-key,x-request-id,anthropic-version,anthropic-beta',
+      'access-control-allow-headers': corsAllowHeaders(request),
       'access-control-max-age': '86400',
     },
   });
+}
+
+function corsAllowHeaders(request: Request): string {
+  const allowed = new Set([
+    'authorization',
+    'content-type',
+    'x-api-key',
+    'x-request-id',
+    'anthropic-version',
+    'anthropic-beta',
+  ]);
+  const requested = request.headers.get('access-control-request-headers');
+  if (requested) {
+    for (const header of requested.split(',')) {
+      const normalized = header.trim().toLowerCase();
+      if (normalized) allowed.add(normalized);
+    }
+  }
+  return [...allowed].join(',');
 }
 
 function withRequestId(response: Response, requestId: string): Response {
