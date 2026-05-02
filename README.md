@@ -110,7 +110,7 @@ Cline-style setup:
 ## Read The Docs
 
 - Hosted docs: `https://achuthanmukundan00.github.io/relay/`
-- Local docs source: [docs/](/home/achu/relay/docs)
+- Local docs source: [[docs/](/home/achu/relay/docs)](https://github.com/achuthanmukundan00/relay/tree/main/docs)
 
 ## Environment Variables
 
