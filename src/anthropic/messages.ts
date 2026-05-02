@@ -3,9 +3,10 @@ import type { AppConfig } from '../config.ts';
 import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRequiredFieldError, unsupportedCapabilityError, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { encodeSSE, parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
-import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
-import { samplingDefaultsFor } from '../profile.ts';
 import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
+import { anthropicMessagesRequestToCanonical } from '../internal/anthropic-messages.ts';
+import { canonicalToUpstreamChatRequest } from '../internal/openai-chat.ts';
+import { canonicalToAnthropicMessage, upstreamChatCompletionToCanonical } from '../internal/response.ts';
 
 type JsonObject = Record<string, any>;
 
@@ -72,32 +73,11 @@ async function readJson(request: Request): Promise<JsonObject> {
 }
 
 function anthropicRequestToChat(input: JsonObject, config: AppConfig): JsonObject {
-  if (input.max_tokens === undefined) {
-    throw missingRequiredFieldError('max_tokens');
-  }
-  const messages: JsonObject[] = [];
-  const system = normalizeSystem(input.system);
-  if (system) messages.push({ role: 'system', content: system });
-  messages.push(...normalizeAnthropicMessages(input.messages, config));
-
-  const chat: JsonObject = { ...input, messages };
-  if (input.stop_sequences !== undefined) chat.stop = input.stop_sequences;
-  const tools = normalizeAnthropicTools(input.tools);
-  if (tools) chat.tools = tools;
-  const toolChoice = normalizeAnthropicToolChoice(input.tool_choice);
-  if (toolChoice !== undefined) chat.tool_choice = toolChoice;
-  delete chat.system;
-  delete chat.stop_sequences;
-  applySamplingDefaults(chat, samplingDefaultsFor(config));
-  // TODO: Map Anthropic thinking to model-specific reasoning controls when an
-  // upstream supports it. For now it is accepted and intentionally not forwarded.
+  const canonical = anthropicMessagesRequestToCanonical(input, config);
+  const chat = canonicalToUpstreamChatRequest(canonical);
+  // Preserve existing behavior: accepted but intentionally not forwarded.
+  delete chat.thinking;
   return chat;
-}
-
-function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {
-  for (const [key, value] of Object.entries(defaults)) {
-    if (value !== undefined && body[key] === undefined) body[key] = value;
-  }
 }
 
 function normalizeSystem(system: unknown): string | undefined {
@@ -216,22 +196,8 @@ function normalizeAnthropicToolChoice(toolChoice: unknown): unknown {
 }
 
 function chatCompletionToAnthropicMessage(chat: unknown, requestedModel: unknown): JsonObject {
-  if (!isObject(chat)) throw upstreamError('bad_response', 'Upstream returned invalid completion');
-  const choice = Array.isArray(chat.choices) ? chat.choices[0] : undefined;
-  const message = isObject(choice?.message) ? choice.message : {};
-  return {
-    id: `msg_${crypto.randomUUID()}`,
-    type: 'message',
-    role: 'assistant',
-    content: openAIMessageToAnthropicContent(message),
-    model: typeof chat.model === 'string' ? chat.model : requestedModel,
-    stop_reason: mapStopReason(choice?.finish_reason),
-    stop_sequence: null,
-    usage: isObject(chat.usage) ? {
-      input_tokens: chat.usage.prompt_tokens ?? 0,
-      output_tokens: chat.usage.completion_tokens ?? 0,
-    } : undefined,
-  };
+  const canonical = upstreamChatCompletionToCanonical(chat, requestedModel);
+  return canonicalToAnthropicMessage(canonical);
 }
 
 async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject): Promise<Response> {

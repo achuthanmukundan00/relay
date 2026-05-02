@@ -1,0 +1,1 @@
+{"route":"/v1/completions","request":{"prompt":"hello"},"response":{"object":"text_completion"}}

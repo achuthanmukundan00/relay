@@ -1,0 +1,1 @@
+{"route":"/v1/chat/completions","request":{"stream":false},"response":{"object":"chat.completion"}}

@@ -1,0 +1,1 @@
+{"route":"/v1/chat/completions","request":{"stream":true},"response":{"content_type":"text/event-stream","done":"[DONE]"}}

@@ -1,12 +1,11 @@
 import type { AppConfig } from '../config.ts';
 import { GatewayError, invalidRequestError, jsonResponse, unsupportedCapabilityError, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
-import { normalizeMessages } from '../normalize/messages.ts';
 import { parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
-import { normalizeTools } from '../normalize/tools.ts';
-import { samplingDefaultsFor } from '../profile.ts';
-import { normalizeOpenAIResponseFormat } from './response-format.ts';
 import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
+import { canonicalToUpstreamChatRequest } from '../internal/openai-chat.ts';
+import { responsesRequestToCanonical } from '../internal/openai-responses.ts';
+import { canonicalToOpenAIResponse, upstreamChatCompletionToCanonical } from '../internal/response.ts';
 
 type JsonObject = Record<string, any>;
 
@@ -68,73 +67,16 @@ export function deleteResponse(store: ResponseStore, id: string): Response {
 }
 
 function responseRequestToChat(input: JsonObject, config: AppConfig): JsonObject {
-  const messages: JsonObject[] = [];
-  if (typeof input.instructions === 'string' && input.instructions.length > 0) {
-    messages.push({ role: 'system', content: input.instructions });
-  }
-  if (typeof input.input === 'string') {
-    messages.push({ role: 'user', content: input.input });
-  } else if (Array.isArray(input.input)) {
-    messages.push(...normalizeResponseInput(input.input, config));
-  } else {
-    throw invalidRequestError('input must be a string or message array');
-  }
-
-  const chat: JsonObject = { ...input, messages };
-  if (input.max_output_tokens !== undefined) chat.max_tokens = input.max_output_tokens;
-  delete chat.instructions;
-  delete chat.input;
-  delete chat.max_output_tokens;
+  const canonical = responsesRequestToCanonical(input, config);
+  const chat = canonicalToUpstreamChatRequest(canonical);
   delete chat.previous_response_id;
   delete chat.store;
-  rejectHostedResponsesTools(chat.tools);
-  applySamplingDefaults(chat, samplingDefaultsFor(config));
-  normalizeTools(chat);
-  normalizeOpenAIResponseFormat(chat, config);
   return chat;
 }
 
-function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {
-  for (const [key, value] of Object.entries(defaults)) {
-    if (value !== undefined && body[key] === undefined) body[key] = value;
-  }
-}
-
 function chatCompletionToResponse(chat: unknown, request: JsonObject): JsonObject {
-  if (!isObject(chat)) throw upstreamError('bad_response', 'Upstream returned invalid completion');
-  const choice = Array.isArray(chat.choices) ? chat.choices[0] : undefined;
-  const message = isObject(choice?.message) ? choice.message : {};
-  const output: JsonObject[] = [{
-    id: `msg_${crypto.randomUUID()}`,
-    type: 'message',
-    status: 'completed',
-    role: 'assistant',
-    content: [],
-  }];
-  if (typeof message.content === 'string' && message.content.length > 0) {
-    output[0].content.push({ type: 'output_text', text: message.content });
-  }
-  if (Array.isArray(message.tool_calls)) {
-    for (const toolCall of message.tool_calls) {
-      output[0].content.push({
-        type: 'function_call',
-        call_id: toolCall.id,
-        name: toolCall.function?.name,
-        arguments: toolCall.function?.arguments ?? '{}',
-      });
-    }
-  }
-  return {
-    id: `resp_${crypto.randomUUID()}`,
-    object: 'response',
-    created_at: typeof chat.created === 'number' ? chat.created : Math.floor(Date.now() / 1000),
-    model: typeof chat.model === 'string' ? chat.model : request.model,
-    status: 'completed',
-    output,
-    previous_response_id: typeof request.previous_response_id === 'string' ? request.previous_response_id : undefined,
-    metadata: isObject(request.metadata) ? request.metadata : undefined,
-    usage: normalizeResponsesUsage(chat.usage),
-  };
+  const canonical = upstreamChatCompletionToCanonical(chat, request.model);
+  return canonicalToOpenAIResponse(canonical, request);
 }
 
 async function streamResponse(config: AppConfig, chatRequest: JsonObject): Promise<Response> {
@@ -203,48 +145,6 @@ async function streamResponse(config: AppConfig, chatRequest: JsonObject): Promi
 
 function sse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-}
-
-function normalizeResponseInput(input: unknown[], config: AppConfig): JsonObject[] {
-  return normalizeMessages(input.map((message) => normalizeResponseInputMessage(message)), config);
-}
-
-function normalizeResponseInputMessage(message: unknown): unknown {
-  if (!isObject(message) || !Array.isArray(message.content)) return message;
-  return {
-    ...message,
-    content: message.content.map((part) => {
-      if (!isObject(part) || typeof part.type !== 'string') return part;
-      if ((part.type === 'input_text' || part.type === 'output_text') && typeof part.text === 'string') {
-        return { type: 'text', text: part.text };
-      }
-      if (part.type === 'input_image' && typeof part.image_url === 'string') {
-        return { type: 'image_url', image_url: { url: part.image_url } };
-      }
-      return part;
-    }),
-  };
-}
-
-function rejectHostedResponsesTools(tools: unknown): void {
-  if (!Array.isArray(tools)) return;
-  for (const tool of tools) {
-    if (isObject(tool) && typeof tool.type === 'string' && tool.type !== 'function') {
-      throw unsupportedCapabilityError(`${tool.type} tools are not supported by this local llama.cpp backend`);
-    }
-  }
-}
-
-function normalizeResponsesUsage(usage: unknown): JsonObject | undefined {
-  if (!isObject(usage)) return undefined;
-  const inputTokens = typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0;
-  const outputTokens = typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0;
-  const totalTokens = typeof usage.total_tokens === 'number' ? usage.total_tokens : inputTokens + outputTokens;
-  return {
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    total_tokens: totalTokens,
-  };
 }
 
 function isObject(value: unknown): value is JsonObject {

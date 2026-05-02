@@ -1,12 +1,10 @@
 import type { AppConfig } from '../config.ts';
-import { GatewayError, invalidRequestError, jsonResponse, missingRequiredFieldError, unsupportedCapabilityError, upstreamError } from '../errors.ts';
+import { GatewayError, invalidRequestError, jsonResponse, unsupportedCapabilityError, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
-import { normalizeMessages } from '../normalize/messages.ts';
 import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
-import { normalizeOpenAIToolCalls, normalizeTools } from '../normalize/tools.ts';
-import { samplingDefaultsFor } from '../profile.ts';
-import { normalizeOpenAIResponseFormat } from './response-format.ts';
 import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
+import { canonicalToUpstreamChatRequest, openAIChatRequestToCanonical } from '../internal/openai-chat.ts';
+import { canonicalToOpenAIChatCompletion, upstreamChatCompletionToCanonical } from '../internal/response.ts';
 
 type JsonObject = Record<string, any>;
 
@@ -179,26 +177,11 @@ function chatCompletionToTextCompletion(chat: JsonObject, original: JsonObject):
 }
 
 function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: JsonObject; strippedFields: string[] } {
-  if (input.messages === undefined) {
-    throw missingRequiredFieldError('messages');
-  }
   const { body, strippedFields } = applyFieldPolicy('openai_chat', input, config);
-  if (body.max_tokens === undefined && input.max_completion_tokens !== undefined) {
-    body.max_tokens = input.max_completion_tokens;
-  }
-  delete body.max_completion_tokens;
-  delete body.store;
-  applySamplingDefaults(body, samplingDefaultsFor(config));
-  body.messages = normalizeMessages(body.messages, config);
-  normalizeTools(body);
-  normalizeOpenAIResponseFormat(body, config);
-  return { body, strippedFields };
-}
-
-function applySamplingDefaults(body: JsonObject, defaults: AppConfig['samplingDefaults']): void {
-  for (const [key, value] of Object.entries(defaults)) {
-    if (value !== undefined && body[key] === undefined) body[key] = value;
-  }
+  const canonical = openAIChatRequestToCanonical(body, config);
+  const upstreamBody = canonicalToUpstreamChatRequest(canonical);
+  delete upstreamBody.store;
+  return { body: upstreamBody, strippedFields };
 }
 
 async function streamChatCompletion(config: AppConfig, body: JsonObject): Promise<Response> {
@@ -223,40 +206,10 @@ async function streamChatCompletion(config: AppConfig, body: JsonObject): Promis
 }
 
 function normalizeCompletion(raw: unknown, requestedModel: unknown, metadata: unknown): JsonObject {
-  if (!isObject(raw)) throw upstreamError('bad_response', 'Upstream returned invalid completion');
-  const completion: JsonObject = {
-    id: typeof raw.id === 'string' ? raw.id : `chatcmpl-${crypto.randomUUID()}`,
-    object: 'chat.completion',
-    created: typeof raw.created === 'number' ? raw.created : Math.floor(Date.now() / 1000),
-    model: typeof raw.model === 'string' ? raw.model : requestedModel,
-    choices: Array.isArray(raw.choices) ? raw.choices.map(normalizeChoice) : [],
-  };
-  if (raw.usage !== undefined) completion.usage = raw.usage;
-  if (raw.system_fingerprint !== undefined) completion.system_fingerprint = raw.system_fingerprint;
-  if (isObject(metadata)) completion.metadata = metadata;
-  if (completion.choices.length === 0) {
-    throw upstreamError('bad_response', 'Upstream returned no choices');
-  }
-  for (const choice of completion.choices) {
-    validateAssistantChoice(choice);
-  }
+  const canonical = upstreamChatCompletionToCanonical(raw, requestedModel);
+  const completion = canonicalToOpenAIChatCompletion(canonical, metadata);
+  for (const choice of completion.choices ?? []) validateAssistantChoice(choice);
   return completion;
-}
-
-function normalizeChoice(choice: unknown): JsonObject {
-  if (!isObject(choice)) return { index: 0, message: emptyAssistant(), finish_reason: 'stop', logprobs: null };
-  const message = isObject(choice.message) ? { ...choice.message } : emptyAssistant();
-  message.role = 'assistant';
-  const toolCalls = normalizeOpenAIToolCalls(message.tool_calls);
-  if (toolCalls) message.tool_calls = toolCalls;
-  if (message.annotations === undefined) message.annotations = [];
-  if (message.refusal === undefined) message.refusal = null;
-  return {
-    index: typeof choice.index === 'number' ? choice.index : 0,
-    message,
-    finish_reason: normalizeFinishReason(choice.finish_reason),
-    logprobs: choice.logprobs ?? null,
-  };
 }
 
 function validateAssistantChoice(choice: JsonObject): void {
@@ -268,19 +221,6 @@ function validateAssistantChoice(choice: JsonObject): void {
   if (!hasContent && !hasRefusal && !hasTools && !hasFunction && choice.finish_reason !== 'stop') {
     throw upstreamError('bad_response', 'Upstream returned an empty assistant response');
   }
-}
-
-function normalizeFinishReason(reason: unknown): string | null {
-  if (reason === null || reason === undefined) return null;
-  if (reason === 'function_call') return 'tool_calls';
-  if (['stop', 'length', 'tool_calls', 'content_filter'].includes(String(reason))) return String(reason);
-  if (String(reason).includes('tool')) return 'tool_calls';
-  if (String(reason).includes('length') || String(reason).includes('max_tokens')) return 'length';
-  return 'stop';
-}
-
-function emptyAssistant(): JsonObject {
-  return { role: 'assistant', content: null, refusal: null, annotations: [] };
 }
 
 function listShape(data: JsonObject[]): JsonObject {

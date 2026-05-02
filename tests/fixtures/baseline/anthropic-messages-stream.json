@@ -1,0 +1,1 @@
+{"route":"/v1/messages","request":{"stream":true},"response":{"events":["message_start","content_block_delta","message_stop"]}}

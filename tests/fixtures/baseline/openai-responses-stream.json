@@ -1,0 +1,1 @@
+{"route":"/v1/responses","request":{"stream":true},"response":{"events":["response.created","response.output_text.delta","response.completed|response.failed"]}}
