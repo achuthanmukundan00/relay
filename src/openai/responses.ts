@@ -4,6 +4,7 @@ import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
 import { parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
 import { normalizeTools } from '../normalize/tools.ts';
+import { samplingDefaultsFor } from '../profile.ts';
 import { normalizeOpenAIResponseFormat } from './response-format.ts';
 import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
 
@@ -87,7 +88,7 @@ function responseRequestToChat(input: JsonObject, config: AppConfig): JsonObject
   delete chat.previous_response_id;
   delete chat.store;
   rejectHostedResponsesTools(chat.tools);
-  applySamplingDefaults(chat, config.samplingDefaults);
+  applySamplingDefaults(chat, samplingDefaultsFor(config));
   normalizeTools(chat);
   normalizeOpenAIResponseFormat(chat, config);
   return chat;

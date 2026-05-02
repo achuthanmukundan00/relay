@@ -21,6 +21,12 @@ test('loads spec defaults', () => {
   assert.equal(config.unknownFieldPolicy, 'pass_through');
   assert.equal(config.strictCompat, false);
   assert.equal(config.warnOnStrippedFields, true);
+  assert.equal(config.modelProfile, 'generic');
+  assert.equal(config.reasoningMode, 'off');
+  assert.equal(config.toolMode, 'auto');
+  assert.equal(config.observabilityEnabled, true);
+  assert.equal(config.logPrompts, false);
+  assert.equal(config.requestHistoryLimit, 100);
 });
 
 test('loads overrides from environment', () => {
@@ -45,6 +51,12 @@ test('loads overrides from environment', () => {
     RELAY_UNKNOWN_FIELD_POLICY: 'reject',
     RELAY_STRICT_COMPAT: 'true',
     RELAY_WARN_ON_STRIPPED_FIELDS: 'false',
+    RELAY_MODEL_PROFILE: 'qwen',
+    RELAY_REASONING_MODE: 'parsed',
+    RELAY_TOOL_MODE: 'native',
+    RELAY_OBSERVABILITY_ENABLED: 'false',
+    RELAY_LOG_PROMPTS: 'true',
+    RELAY_REQUEST_HISTORY_LIMIT: '25',
   });
 
   assert.equal(config.port, 9090);
@@ -69,4 +81,10 @@ test('loads overrides from environment', () => {
   assert.equal(config.unknownFieldPolicy, 'reject');
   assert.equal(config.strictCompat, true);
   assert.equal(config.warnOnStrippedFields, false);
+  assert.equal(config.modelProfile, 'qwen');
+  assert.equal(config.reasoningMode, 'parsed');
+  assert.equal(config.toolMode, 'native');
+  assert.equal(config.observabilityEnabled, false);
+  assert.equal(config.logPrompts, true);
+  assert.equal(config.requestHistoryLimit, 25);
 });

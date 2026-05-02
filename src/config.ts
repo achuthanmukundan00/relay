@@ -16,9 +16,27 @@ export type AppConfig = {
   unknownFieldPolicy: UnknownFieldPolicy;
   strictCompat: boolean;
   warnOnStrippedFields: boolean;
+  modelProfile: RelayModelProfileId;
+  reasoningMode: RelayReasoningMode;
+  toolMode: RelayToolMode;
+  observabilityEnabled: boolean;
+  logPrompts: boolean;
+  requestHistoryLimit: number;
 };
 
 export type UnknownFieldPolicy = 'pass_through' | 'strip' | 'reject';
+export type RelayModelProfileId =
+  | 'generic'
+  | 'qwen'
+  | 'deepseek'
+  | 'gemma'
+  | 'mistral'
+  | 'llama'
+  | 'kimi'
+  | 'openai_compatible'
+  | 'anthropic_compatible';
+export type RelayReasoningMode = 'off' | 'raw' | 'parsed' | 'preserve';
+export type RelayToolMode = 'auto' | 'native' | 'generic' | 'off';
 
 export type SamplingDefaults = {
   temperature?: number;
@@ -48,6 +66,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     unknownFieldPolicy: readUnknownFieldPolicy(env.RELAY_UNKNOWN_FIELD_POLICY),
     strictCompat: readBoolean(env.RELAY_STRICT_COMPAT, false),
     warnOnStrippedFields: readBoolean(env.RELAY_WARN_ON_STRIPPED_FIELDS, true),
+    modelProfile: readModelProfile(env.RELAY_MODEL_PROFILE),
+    reasoningMode: readReasoningMode(env.RELAY_REASONING_MODE),
+    toolMode: readToolMode(env.RELAY_TOOL_MODE),
+    observabilityEnabled: readBoolean(env.RELAY_OBSERVABILITY_ENABLED, true),
+    logPrompts: readBoolean(env.RELAY_LOG_PROMPTS, false),
+    requestHistoryLimit: readInteger(env.RELAY_REQUEST_HISTORY_LIMIT, 100, 'RELAY_REQUEST_HISTORY_LIMIT'),
   };
 }
 
@@ -101,6 +125,36 @@ function readUnknownFieldPolicy(value: string | undefined): UnknownFieldPolicy {
   const raw = readOptional(value) ?? 'pass_through';
   if (raw === 'pass_through' || raw === 'strip' || raw === 'reject') return raw;
   throw new Error('RELAY_UNKNOWN_FIELD_POLICY must be pass_through, strip, or reject');
+}
+
+function readModelProfile(value: string | undefined): RelayModelProfileId {
+  const raw = readOptional(value) ?? 'generic';
+  if ([
+    'generic',
+    'qwen',
+    'deepseek',
+    'gemma',
+    'mistral',
+    'llama',
+    'kimi',
+    'openai_compatible',
+    'anthropic_compatible',
+  ].includes(raw)) {
+    return raw as RelayModelProfileId;
+  }
+  throw new Error('RELAY_MODEL_PROFILE must be one of generic, qwen, deepseek, gemma, mistral, llama, kimi, openai_compatible, anthropic_compatible');
+}
+
+function readReasoningMode(value: string | undefined): RelayReasoningMode {
+  const raw = readOptional(value) ?? 'off';
+  if (raw === 'off' || raw === 'raw' || raw === 'parsed' || raw === 'preserve') return raw;
+  throw new Error('RELAY_REASONING_MODE must be off, raw, parsed, or preserve');
+}
+
+function readToolMode(value: string | undefined): RelayToolMode {
+  const raw = readOptional(value) ?? 'auto';
+  if (raw === 'auto' || raw === 'native' || raw === 'generic' || raw === 'off') return raw;
+  throw new Error('RELAY_TOOL_MODE must be auto, native, generic, or off');
 }
 
 function readOptionalNumber(value: string | undefined, name: string): number | undefined {

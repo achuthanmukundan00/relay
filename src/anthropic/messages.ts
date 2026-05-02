@@ -4,6 +4,7 @@ import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRe
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { encodeSSE, parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
 import { normalizeAnthropicTools, openAIMessageToAnthropicContent } from '../normalize/tools.ts';
+import { samplingDefaultsFor } from '../profile.ts';
 import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
 
 type JsonObject = Record<string, any>;
@@ -87,7 +88,7 @@ function anthropicRequestToChat(input: JsonObject, config: AppConfig): JsonObjec
   if (toolChoice !== undefined) chat.tool_choice = toolChoice;
   delete chat.system;
   delete chat.stop_sequences;
-  applySamplingDefaults(chat, config.samplingDefaults);
+  applySamplingDefaults(chat, samplingDefaultsFor(config));
   // TODO: Map Anthropic thinking to model-specific reasoning controls when an
   // upstream supports it. For now it is accepted and intentionally not forwarded.
   return chat;

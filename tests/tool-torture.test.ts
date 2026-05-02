@@ -371,6 +371,12 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     unknownFieldPolicy: 'pass_through',
     strictCompat: false,
     warnOnStrippedFields: true,
+    modelProfile: 'generic',
+    reasoningMode: 'off',
+    toolMode: 'auto',
+    observabilityEnabled: true,
+    logPrompts: false,
+    requestHistoryLimit: 100,
   };
 }
 

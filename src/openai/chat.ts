@@ -4,6 +4,7 @@ import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { normalizeMessages } from '../normalize/messages.ts';
 import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
 import { normalizeOpenAIToolCalls, normalizeTools } from '../normalize/tools.ts';
+import { samplingDefaultsFor } from '../profile.ts';
 import { normalizeOpenAIResponseFormat } from './response-format.ts';
 import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
 
@@ -187,7 +188,7 @@ function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: Jso
   }
   delete body.max_completion_tokens;
   delete body.store;
-  applySamplingDefaults(body, config.samplingDefaults);
+  applySamplingDefaults(body, samplingDefaultsFor(config));
   body.messages = normalizeMessages(body.messages, config);
   normalizeTools(body);
   normalizeOpenAIResponseFormat(body, config);
