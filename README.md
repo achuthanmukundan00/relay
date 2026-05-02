@@ -1,8 +1,17 @@
 # Relay
 
+[![License](https://img.shields.io/github/license/achuthanmukundan00/relay)](https://github.com/achuthanmukundan00/relay/blob/main/LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/achuthanmukundan00/relay)](https://github.com/achuthanmukundan00/relay/releases/latest)
+[![Docs Workflow](https://img.shields.io/github/actions/workflow/status/achuthanmukundan00/relay/docs.yml?label=docs)](https://github.com/achuthanmukundan00/relay/actions/workflows/docs.yml)
+[![Docs](https://img.shields.io/badge/docs-site-blue)](https://achuthanmukundan00.github.io/relay/)
+
 Relay is a lightweight, agent-focused gateway that makes local LLM servers look like hosted OpenAI- and Anthropic-style APIs.
 
 It sits between clients and a local upstream model server (like `llama.cpp`), normalizes request/response shapes, and preserves practical compatibility for tools that expect modern API conventions.
+
+- Docs site: `https://achuthanmukundan00.github.io/relay/`
+- Latest release: `https://github.com/achuthanmukundan00/relay/releases/latest`
+- Current release tag (`v0.1.1`): `https://github.com/achuthanmukundan00/relay/releases/tag/v0.1.1`
 
 ## Why Relay Exists
 

@@ -1,0 +1,39 @@
+name: Compatibility report
+description: Report client/API compatibility behavior
+title: "[Compatibility]: "
+labels:
+  - compatibility
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Relay is not currently accepting public code contributions.
+        Use this template for concrete compatibility findings.
+  - type: input
+    id: version
+    attributes:
+      label: Relay version
+      description: Include release tag (for example, v0.1.1)
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client and version
+      description: e.g. SDK/agent/tool name and exact version.
+    validations:
+      required: true
+  - type: textarea
+    id: endpoint
+    attributes:
+      label: Endpoint and payload shape
+      description: Include target endpoint and a minimal request example.
+    validations:
+      required: true
+  - type: textarea
+    id: mismatch
+    attributes:
+      label: Compatibility mismatch
+      description: Describe expected behavior vs. observed behavior.
+    validations:
+      required: true

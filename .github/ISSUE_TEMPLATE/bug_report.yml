@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible Relay bug
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Relay is not currently accepting public code contributions.
+        Use this template for reproducible defects only.
+  - type: input
+    id: version
+    attributes:
+      label: Relay version
+      description: Include release tag (for example, v0.1.1)
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Briefly describe the bug and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide exact steps, sample request, and observed response/logs.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Node version, upstream model server, and relevant config.
+    validations:
+      required: true
