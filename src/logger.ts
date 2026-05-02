@@ -1,3 +1,5 @@
+import { redactForLogs } from './redact.ts';
+
 export type Logger = {
   info: (message: string, fields?: Record<string, unknown>) => void;
   error: (message: string, fields?: Record<string, unknown>) => void;
@@ -16,7 +18,7 @@ export function createLogger(level = 'info'): Logger {
 }
 
 function writeLog(level: string, message: string, fields: Record<string, unknown>) {
-  const line = JSON.stringify({ time: new Date().toISOString(), level, message, ...fields });
+  const line = JSON.stringify(redactForLogs({ time: new Date().toISOString(), level, message, ...fields }));
   const stream = level === 'error' ? process.stderr : process.stdout;
   stream.write(`${line}\n`);
 }

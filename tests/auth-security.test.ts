@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import test from 'node:test';
 
 import type { AppConfig } from '../src/config.ts';
+import { createLogger } from '../src/logger.ts';
 import { createApp } from '../src/server.ts';
 
 test('default config binds to localhost unless HOST is explicit', async () => {
@@ -73,6 +74,34 @@ test('error logs include request ids without leaking API keys or prompts', async
   }
 });
 
+test('logger redacts auth headers, CF access headers, cookies, and bearer tokens', () => {
+  const writes: string[] = [];
+  const originalWrite = process.stdout.write;
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    writes.push(Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    const logger = createLogger('info');
+    logger.info('diagnostic', {
+      authorization: 'Bearer top-secret-token',
+      'cf-access-client-id': 'client-id-value',
+      'cf-access-client-secret': 'client-secret-value',
+      cookie: 'session=very-secret',
+      nested: {
+        api_key: 'nested-secret',
+        note: 'Authorization: Bearer still-secret',
+      },
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+
+  const logText = writes.join('');
+  assert.doesNotMatch(logText, /top-secret-token|client-id-value|client-secret-value|very-secret|nested-secret|still-secret/);
+  assert.match(logText, /\[REDACTED\]/);
+});
+
 test('oversized HTTP request bodies are rejected before upstream handling', async () => {
   const app = createApp({
     ...testConfig('http://127.0.0.1:9'),
@@ -121,5 +150,11 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     logLevel: 'info',
     completionTtlMs: 3_600_000,
     maxRequestBodyBytes: 1_048_576,
+    probeOnStartup: true,
+    strictStartup: false,
+    probeTimeoutMs: 3_000,
+    unknownFieldPolicy: 'pass_through',
+    strictCompat: false,
+    warnOnStrippedFields: true,
   };
 }
