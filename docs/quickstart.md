@@ -15,7 +15,7 @@ Your upstream must expose OpenAI-style endpoints at `http://127.0.0.1:8080/v1`.
 ## 2. Install Relay
 
 ```bash
-git clone https://github.com/<username>/relay.git
+git clone https://github.com/achuthanmukundan00/relay.git
 cd relay
 npm install
 cp .env.example .env

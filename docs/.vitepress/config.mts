@@ -7,7 +7,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Docs', link: '/' },
-      { text: 'GitHub', link: 'https://github.com/<username>/relay' },
+      { text: 'GitHub', link: 'https://github.com/achuthanmukundan00/relay' },
     ],
     sidebar: [
       { text: 'Overview', items: [{ text: 'Introduction', link: '/' }] },
@@ -29,6 +29,6 @@ export default defineConfig({
         ],
       },
     ],
-    socialLinks: [{ icon: 'github', link: 'https://github.com/<username>/relay' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/achuthanmukundan00/relay' }],
   },
 });
