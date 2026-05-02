@@ -10,7 +10,7 @@ import { createEmbedding, createRerank } from './openai/embeddings.ts';
 import { handleModels } from './openai/models.ts';
 import { createResponse, deleteResponse, getResponse, ResponseStore } from './openai/responses.ts';
 import { createLogger } from './logger.ts';
-import { captureRequest, classifyErrorSource, detectProtocol, ObservabilityStore, routeLabel } from './observability.ts';
+import { captureRequest, classifyErrorSource, classifyFailure, detectProtocol, ObservabilityStore, routeLabel } from './observability.ts';
 import { activeProfile } from './profile.ts';
 
 type AppFetchInit = Omit<RequestInit, 'body'> & { body?: unknown };
@@ -221,9 +221,11 @@ export function createApp(config: AppConfig): App {
         }
         const detail = extractObservabilityFields(payload);
         const errorSource = classifyErrorSource(detail.error_type, detail.error_code);
+        const failureClassification = classifyFailure(detail.error_type, detail.error_code, currentResponse.status);
         const summary = {
           ...summaryBase,
           ...detail,
+          failure_classification: failureClassification,
           request: requestCapture,
           response: {
             status_code: currentResponse.status,
@@ -231,6 +233,7 @@ export function createApp(config: AppConfig): App {
             error_type: detail.error_type,
             error_code: detail.error_code ?? null,
             error_source: errorSource,
+            failure_classification: failureClassification,
           },
         };
         if (streaming) {

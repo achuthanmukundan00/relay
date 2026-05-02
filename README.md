@@ -10,6 +10,8 @@
 
 Relay is a small local compatibility layer. It sits in front of a running `llama-server`, accepts a focused subset of OpenAI and Anthropic client traffic, normalizes the request shape, and sends the work upstream.
 
+Relay is also meant to be the first reliability layer in a constrained local coding stack: weak or low-quant local models, consumer GPUs, Pi/LAN topologies, and agent clients that need help staying inside a narrower compatibility envelope.
+
 The v0.1 goal is deliberately boring: if a client fails, Relay should make it easy to prove whether the problem is client configuration, Cloudflare Access/header handling, Relay schema compatibility, or upstream llama.cpp/model behavior.
 
 ## What Relay Is
@@ -338,9 +340,10 @@ model: openai/local
 - The test suite is mostly mocked handler coverage.
 - Real SDK smoke scripts live under `scripts/compat/`.
 - Manual client smoke steps live in [docs/manual-smoke-testing.md](/home/achu/relay/docs/manual-smoke-testing.md).
+- Product direction for constrained local-agent reliability lives in [docs/product-direction.md](/home/achu/relay/docs/product-direction.md).
 - The compatibility status table lives in [docs/compatibility-matrix.md](/home/achu/relay/docs/compatibility-matrix.md).
-- Troubleshooting steps for Pi, Cloudflare Access, LAN bypass, and local header injection live in [docs/troubleshooting.md](/home/achu/relay/docs/troubleshooting.md).
-- Large agent prompts on big models can spend multiple minutes in llama.cpp prefill before first token. See [docs/agents.md](/home/achu/relay/docs/agents.md) and [docs/deploy-systemd.md](/home/achu/relay/docs/deploy-systemd.md) for the safer debug profile and the large-context warning.
+- Troubleshooting steps for Pi, Cloudflare Access, LAN bypass, local header injection, and failure classifications live in [docs/troubleshooting.md](/home/achu/relay/docs/troubleshooting.md).
+- Large agent prompts on big models can spend multiple minutes in llama.cpp prefill before first token. See [docs/agents.md](/home/achu/relay/docs/agents.md), [docs/small-model-coding-agent-mode.md](/home/achu/relay/docs/small-model-coding-agent-mode.md), and [docs/deploy-systemd.md](/home/achu/relay/docs/deploy-systemd.md) for the safer debug profile and the large-context warning.
 - Embeddings and rerank are implemented as local compatibility routes, but real client coverage for them is still mostly manual.
 - Vision should be treated as unproven unless you explicitly configure and test it against your local upstream.
 - Local observability is intentionally lightweight. Use `/relay/capabilities`, `/relay/stats`, `/relay/requests`, and `x-relay-request-id` to decide whether a failure came from Relay, the upstream server, or the client path.

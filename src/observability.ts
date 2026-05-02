@@ -28,7 +28,16 @@ export type ResponseCapture = {
   error_type?: string;
   error_code?: string | null;
   error_source: 'upstream' | 'relay' | null;
+  failure_classification?: FailureClassification | null;
 };
+
+export type FailureClassification =
+  | 'client_request_incompatibility'
+  | 'relay_compatibility_bug'
+  | 'upstream_model_failure'
+  | 'low_quant_malformed_output'
+  | 'hardware_resource_timeout'
+  | 'cloudflare_auth_failure';
 
 export type RequestSummary = {
   request_id: string;
@@ -52,6 +61,7 @@ export type RequestSummary = {
   error_type?: string;
   error_code?: string | null;
   error_source?: 'upstream' | 'relay' | null;
+  failure_classification?: FailureClassification | null;
   request: RequestCapture;
   response: ResponseCapture;
 };
@@ -213,6 +223,19 @@ export function classifyErrorSource(errorType: unknown, errorCode: unknown): 'up
   if (typeof errorCode === 'string' && errorCode.startsWith('upstream_')) return 'upstream';
   if (typeof errorType === 'string') return 'relay';
   return null;
+}
+
+export function classifyFailure(errorType: unknown, errorCode: unknown, httpStatus: unknown): FailureClassification | null {
+  if (typeof httpStatus === 'number' && httpStatus === 401) return 'cloudflare_auth_failure';
+  if (typeof errorType !== 'string') return null;
+  if (errorType === 'internal_error') return 'relay_compatibility_bug';
+  if (errorType === 'unsupported_endpoint' || errorType === 'unsupported_capability' || errorType === 'invalid_request_error') {
+    return 'client_request_incompatibility';
+  }
+  if (errorType !== 'upstream_error') return null;
+  if (errorCode === 'upstream_timeout') return 'hardware_resource_timeout';
+  if (errorCode === 'upstream_bad_response' || errorCode === 'stream_interrupted') return 'low_quant_malformed_output';
+  return 'upstream_model_failure';
 }
 
 export function detectProtocol(path: string): RequestSummary['client_protocol'] {

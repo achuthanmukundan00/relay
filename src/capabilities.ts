@@ -36,8 +36,18 @@ export type RelayCapabilities = {
   };
   profile: {
     id: string;
+    name: string;
     reasoningMode: string;
     toolMode: string;
+    expectedContext?: {
+      recommended: string;
+      ceiling?: string;
+      notes?: string;
+    };
+    recommendedSampling: Record<string, unknown>;
+    knownClientCompatibility: string[];
+    knownFailureModes: string[];
+    recommendedAgentWorkflow: string[];
   };
   checkedAt: string;
 };

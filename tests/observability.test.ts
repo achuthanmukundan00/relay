@@ -50,6 +50,7 @@ test('observability endpoints expose bounded stats and request history without p
     assert.equal(requestsBody.data[0].streaming, true);
     assert.equal('messages' in requestsBody.data[0], false);
     assert.equal(requestsBody.data[1].error_code, 'missing_required_field');
+    assert.equal(requestsBody.data[1].failure_classification, 'client_request_incompatibility');
 
     const stats = await app.fetch('/relay/stats');
     assert.equal(stats.status, 200);
@@ -110,6 +111,34 @@ test('request detail returns the recorded summary when still inside the history 
     assert.equal(body.model, 'llama');
     assert.equal(body.prompt_tokens, 2);
     assert.equal(body.total_tokens, 3);
+    assert.equal(body.failure_classification ?? null, null);
+  });
+});
+
+test('observability records upstream timeout and auth failures with the local-agent classification buckets', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    };
+    const app = createApp({ ...testConfig(upstream.url), apiKey: 'secret', requestTimeoutMs: 10 });
+
+    const unauthorized = await app.fetch('/v1/models');
+    assert.equal(unauthorized.status, 401);
+
+    const timedOut = await app.fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { authorization: 'Bearer secret' },
+      body: { model: 'llama', messages: [{ role: 'user', content: 'hi' }] },
+    });
+    assert.equal(timedOut.status, 504);
+
+    const requests = await app.fetch('/relay/requests', {
+      headers: { authorization: 'Bearer secret' },
+    });
+    const body = await requests.json();
+    const classifications = body.data.map((entry: any) => entry.failure_classification).filter(Boolean);
+    assert.equal(classifications.includes('cloudflare_auth_failure'), true);
+    assert.equal(classifications.includes('hardware_resource_timeout'), true);
   });
 });
 
