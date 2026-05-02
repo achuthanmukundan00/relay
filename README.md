@@ -88,8 +88,10 @@ Anthropic SDKs should use the Relay base URL, not `.../v1/messages`. The SDK app
 1. Start `llama-server`:
 
 ```bash
-llama-server --model /path/to/model.gguf --host 127.0.0.1 --port 8080
+llama-server --model /path/to/model.gguf --host 127.0.0.1 --port 8080 --ctx-size 16384 --cache-ram 0 --batch-size 1024 --ubatch-size 512 -ngl 999
 ```
+
+If your current llama.cpp build supports it for the selected model template, add `--reasoning off` during agent smoke testing.
 
 2. Install and start Relay:
 
@@ -104,6 +106,7 @@ npm start
 ```bash
 curl http://127.0.0.1:1234/health
 curl http://127.0.0.1:1234/v1/models
+./scripts/smoke-local-openai.sh
 ```
 
 4. Send a chat completion:
@@ -258,6 +261,7 @@ model: openai/local
 - Real SDK smoke scripts live under `scripts/compat/`.
 - Manual client smoke steps live in [docs/manual-smoke-testing.md](/home/achu/relay/docs/manual-smoke-testing.md).
 - The compatibility status table lives in [docs/compatibility-matrix.md](/home/achu/relay/docs/compatibility-matrix.md).
+- Large agent prompts on big models can spend multiple minutes in llama.cpp prefill before first token. See [docs/agents.md](/home/achu/relay/docs/agents.md) and [docs/deploy-systemd.md](/home/achu/relay/docs/deploy-systemd.md) for the safer debug profile and the large-context warning.
 - Continue-style embeddings workflows are still out of scope because embeddings are not implemented.
 - Vision should be treated as unproven unless you explicitly configure and test it against your local upstream.
 
