@@ -5,16 +5,16 @@ Relay targets practical compatibility for local model servers, not vendor-comple
 ## Supported Endpoints
 
 - `GET /health`
-- `GET /v1/models`
-- `GET /v1/models/:model`
-- `POST /v1/chat/completions`
-- `POST /v1/completions`
-- `POST /v1/responses`
-- `GET /v1/responses/:id`
-- `DELETE /v1/responses/:id`
-- `POST /v1/messages`
-- `POST /v1/messages/count_tokens`
-- `POST /v1/embeddings`
+- [`GET /v1/models`](https://platform.openai.com/docs/api-reference/models/list)
+- [`GET /v1/models/:model`](https://platform.openai.com/docs/api-reference/models/retrieve)
+- [`POST /v1/chat/completions`](https://developers.openai.com/api/reference/chat-completions/overview)
+- [`POST /v1/completions`](https://platform.openai.com/docs/api-reference/completions/create)
+- [`POST /v1/responses`](https://platform.openai.com/docs/api-reference/responses/create)
+- [`GET /v1/responses/:id`](https://platform.openai.com/docs/api-reference/responses/get)
+- [`DELETE /v1/responses/:id`](https://platform.openai.com/docs/api-reference/responses/delete)
+- [`POST /v1/messages`](https://platform.claude.com/docs/en/api/messages)
+- [`POST /v1/messages/count_tokens`](https://platform.claude.com/docs/en/api/messages/count_tokens)
+- [`POST /v1/embeddings`](https://platform.openai.com/docs/api-reference/embeddings/create)
 - `POST /v1/rerank`
 - `POST /rerank`
 - `GET /relay/capabilities`

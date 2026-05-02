@@ -22,7 +22,7 @@ If connection fails, Relay is not listening on expected `HOST`/`PORT`.
 
 ## Model Errors
 
-- List models: `curl http://127.0.0.1:1234/v1/models`.
+- List models: `curl http://127.0.0.1:1234/v1/models` ([`GET /v1/models` reference](https://platform.openai.com/docs/api-reference/models/list)).
 - Use a returned model ID explicitly in client requests.
 
 ## Smoke Test Failures

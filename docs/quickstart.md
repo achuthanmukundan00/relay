@@ -55,7 +55,7 @@ Use OpenAI-compatible mode:
 
 - Base URL: `http://127.0.0.1:1234/v1`
 - API key: any non-empty string (or your configured `API_KEY`)
-- Model: choose one from `GET /v1/models`
+- Model: choose one from [`GET /v1/models`](https://platform.openai.com/docs/api-reference/models/list)
 
 ## Optional Smoke Checks
 
