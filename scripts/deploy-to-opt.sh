@@ -106,6 +106,14 @@ fi
 echo "Restarting $SERVICE_NAME"
 sudo systemctl restart "$SERVICE_NAME"
 
+echo "Waiting for relay health endpoint"
+for _ in $(seq 1 20); do
+  if curl -fsS "http://127.0.0.1:1234/health" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
 echo "Running doctor"
 npm run doctor
 
