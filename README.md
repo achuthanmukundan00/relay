@@ -10,6 +10,8 @@
 
 Relay is a small local compatibility layer. It sits in front of a running `llama-server`, accepts a focused subset of OpenAI and Anthropic client traffic, normalizes the request shape, and sends the work upstream.
 
+The v0.1 goal is deliberately boring: if a client fails, Relay should make it easy to prove whether the problem is client configuration, Cloudflare Access/header handling, Relay schema compatibility, or upstream llama.cpp/model behavior.
+
 ## What Relay Is
 
 - a local HTTP gateway
@@ -106,7 +108,8 @@ npm start
 ```bash
 curl http://127.0.0.1:1234/health
 curl http://127.0.0.1:1234/v1/models
-./scripts/smoke-local-openai.sh
+npm run smoke:all
+npm run doctor
 ```
 
 4. Send a chat completion:
@@ -149,6 +152,39 @@ Relay reads these environment variables:
 | `API_KEY` | empty |
 
 See [.env.example](/home/achu/relay/.env.example) for the repo-default file.
+
+## Diagnostics
+
+Repo-local acceptance commands:
+
+```bash
+npm test
+npm run smoke:all
+npm run doctor
+```
+
+`npm run smoke:all` checks:
+
+- Relay `/health`
+- Relay `/relay/capabilities`
+- Relay `/v1/models`
+- OpenAI chat non-streaming
+- OpenAI chat streaming with valid SSE and `data: [DONE]`
+- Anthropic messages non-streaming if supported
+- Anthropic messages streaming if supported
+
+`npm run doctor` checks:
+
+- effective Relay env
+- Relay health
+- Relay capabilities
+- upstream health
+- upstream `/v1/models` if available
+- OpenAI non-streaming chat
+- OpenAI streaming chat
+- Anthropic messages smoke if supported
+
+Doctor output is intentionally short and redacts `Authorization`, bearer tokens, API keys, Cloudflare Access headers, and cookies.
 
 ## API Examples
 
@@ -261,6 +297,7 @@ model: openai/local
 - Real SDK smoke scripts live under `scripts/compat/`.
 - Manual client smoke steps live in [docs/manual-smoke-testing.md](/home/achu/relay/docs/manual-smoke-testing.md).
 - The compatibility status table lives in [docs/compatibility-matrix.md](/home/achu/relay/docs/compatibility-matrix.md).
+- Troubleshooting steps for Pi, Cloudflare Access, LAN bypass, and local header injection live in [docs/troubleshooting.md](/home/achu/relay/docs/troubleshooting.md).
 - Large agent prompts on big models can spend multiple minutes in llama.cpp prefill before first token. See [docs/agents.md](/home/achu/relay/docs/agents.md) and [docs/deploy-systemd.md](/home/achu/relay/docs/deploy-systemd.md) for the safer debug profile and the large-context warning.
 - Continue-style embeddings workflows are still out of scope because embeddings are not implemented.
 - Vision should be treated as unproven unless you explicitly configure and test it against your local upstream.
