@@ -27,7 +27,7 @@ The v0.1 goal is deliberately boring: if a client fails, Relay should make it ea
 - not a UI
 - not a replacement for `llama.cpp`
 - not a guarantee of full hosted OpenAI or Anthropic feature parity
-- not an embeddings, rerank, realtime, assistants, or vector-store implementation
+- not a realtime, assistants, vector-store, or hosted-tool implementation
 
 ## Architecture
 
@@ -59,13 +59,19 @@ Implemented Relay surfaces:
 - `DELETE /v1/responses/:id`
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
+- `POST /v1/embeddings`
+- `POST /v1/rerank`
+- `POST /rerank`
 - `GET /relay/capabilities`
 - `POST /relay/capabilities/refresh`
+- `GET /relay/stats`
+- `GET /relay/requests`
+- `GET /relay/requests/:id`
+
+The local RAG-compatible routes are `/v1/embeddings`, `/v1/rerank`, and `/rerank`.
 
 Unsupported or intentionally out of scope:
 
-- `/v1/embeddings`
-- rerank APIs
 - hosted tools such as web search, file search, code interpreter, and computer use
 - `/v1/images/*`
 - `/v1/audio/*`
@@ -99,7 +105,7 @@ If your current llama.cpp build supports it for the selected model template, add
 
 ```bash
 npm install
-npm test
+npm run verify
 npm start
 ```
 
@@ -134,12 +140,12 @@ Relay reads these environment variables:
 | `PORT` | `1234` |
 | `UPSTREAM_BASE_URL` | `http://127.0.0.1:8080/v1` |
 | `DEFAULT_MODEL` | empty |
-| `DEFAULT_TEMPERATURE` | `1.0` |
-| `DEFAULT_TOP_P` | `0.95` |
-| `DEFAULT_TOP_K` | `20` |
-| `DEFAULT_MIN_P` | `0.0` |
-| `DEFAULT_PRESENCE_PENALTY` | `1.5` |
-| `DEFAULT_REPETITION_PENALTY` | `1.0` |
+| `DEFAULT_TEMPERATURE` | unset |
+| `DEFAULT_TOP_P` | unset |
+| `DEFAULT_TOP_K` | unset |
+| `DEFAULT_MIN_P` | unset |
+| `DEFAULT_PRESENCE_PENALTY` | unset |
+| `DEFAULT_REPETITION_PENALTY` | unset |
 | `REQUEST_TIMEOUT_SECONDS` | `600` |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` |
 | `RELAY_PROBE_ON_STARTUP` | `true` |
@@ -148,20 +154,28 @@ Relay reads these environment variables:
 | `RELAY_UNKNOWN_FIELD_POLICY` | `pass_through` |
 | `RELAY_STRICT_COMPAT` | `false` |
 | `RELAY_WARN_ON_STRIPPED_FIELDS` | `true` |
+| `RELAY_MODEL_PROFILE` | `generic` |
+| `RELAY_REASONING_MODE` | `off` |
+| `RELAY_TOOL_MODE` | `auto` |
+| `RELAY_OBSERVABILITY_ENABLED` | `true` |
+| `RELAY_LOG_PROMPTS` | `false` |
+| `RELAY_REQUEST_HISTORY_LIMIT` | `100` |
 | `LOG_LEVEL` | `info` |
 | `API_KEY` | empty |
 
-See [.env.example](/home/achu/relay/.env.example) for the repo-default file.
+The repo's [.env.example](/home/achu/relay/.env.example) sets opinionated sampling defaults for local use. Relay itself treats those sampling values as optional unless you set them.
 
 ## Diagnostics
 
 Repo-local acceptance commands:
 
 ```bash
-npm test
+npm run verify
 npm run smoke:all
 npm run doctor
 ```
+
+`npm run verify` is the main repo-local verification path. It runs unit tests and typecheck without requiring a live upstream server.
 
 `npm run smoke:all` checks:
 
@@ -172,6 +186,7 @@ npm run doctor
 - OpenAI chat streaming with valid SSE and `data: [DONE]`
 - Anthropic messages non-streaming if supported
 - Anthropic messages streaming if supported
+- live capability probing against the configured upstream
 
 `npm run doctor` checks:
 
@@ -183,6 +198,7 @@ npm run doctor
 - OpenAI non-streaming chat
 - OpenAI streaming chat
 - Anthropic messages smoke if supported
+- request-id and capability visibility for failure isolation
 
 Doctor output is intentionally short and redacts `Authorization`, bearer tokens, API keys, Cloudflare Access headers, and cookies.
 
@@ -203,6 +219,32 @@ curl -X POST http://127.0.0.1:1234/v1/responses \
     "model": "local",
     "input": "Say OK",
     "store": false
+  }'
+```
+
+OpenAI-compatible Embeddings:
+
+```bash
+curl -X POST http://127.0.0.1:1234/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "input": "Relay embeddings smoke test",
+    "encoding_format": "float"
+  }'
+```
+
+OpenAI-compatible Rerank:
+
+```bash
+curl -X POST http://127.0.0.1:1234/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "query": "What is Relay?",
+    "documents": ["Relay is a local gateway.", "This is unrelated."],
+    "top_n": 1,
+    "return_documents": true
   }'
 ```
 
@@ -299,14 +341,15 @@ model: openai/local
 - The compatibility status table lives in [docs/compatibility-matrix.md](/home/achu/relay/docs/compatibility-matrix.md).
 - Troubleshooting steps for Pi, Cloudflare Access, LAN bypass, and local header injection live in [docs/troubleshooting.md](/home/achu/relay/docs/troubleshooting.md).
 - Large agent prompts on big models can spend multiple minutes in llama.cpp prefill before first token. See [docs/agents.md](/home/achu/relay/docs/agents.md) and [docs/deploy-systemd.md](/home/achu/relay/docs/deploy-systemd.md) for the safer debug profile and the large-context warning.
-- Continue-style embeddings workflows are still out of scope because embeddings are not implemented.
+- Embeddings and rerank are implemented as local compatibility routes, but real client coverage for them is still mostly manual.
 - Vision should be treated as unproven unless you explicitly configure and test it against your local upstream.
+- Local observability is intentionally lightweight. Use `/relay/capabilities`, `/relay/stats`, `/relay/requests`, and `x-relay-request-id` to decide whether a failure came from Relay, the upstream server, or the client path.
 
 ## Development
 
 ```bash
 npm install
-npm test
+npm run verify
 npm start
 ```
 

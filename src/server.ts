@@ -3,12 +3,15 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { hasValidApiKey } from './auth.ts';
 import { CapabilityRegistry } from './capabilities.ts';
 import type { AppConfig } from './config.ts';
-import { errorResponse, invalidJsonError, jsonResponse, openAIError, requestTooLargeError, unsupportedEndpoint } from './errors.ts';
+import { errorResponse, GatewayError, invalidJsonError, jsonResponse, openAIError, requestTooLargeError, unsupportedEndpoint } from './errors.ts';
 import { handleAnthropicCountTokens, handleAnthropicMessages } from './anthropic/messages.ts';
 import { createChatCompletion, createCompletionShim, CompletionStore, deleteStoredCompletion, getStoredCompletion, getStoredMessages, listStoredCompletions, updateStoredCompletion } from './openai/chat.ts';
+import { createEmbedding, createRerank } from './openai/embeddings.ts';
 import { handleModels } from './openai/models.ts';
 import { createResponse, deleteResponse, getResponse, ResponseStore } from './openai/responses.ts';
 import { createLogger } from './logger.ts';
+import { captureRequest, classifyErrorSource, detectProtocol, ObservabilityStore, routeLabel } from './observability.ts';
+import { activeProfile } from './profile.ts';
 
 type AppFetchInit = Omit<RequestInit, 'body'> & { body?: unknown };
 
@@ -23,77 +26,119 @@ export function createApp(config: AppConfig): App {
   const store = new CompletionStore();
   const responseStore = new ResponseStore();
   const capabilities = new CapabilityRegistry(config);
+  const observability = new ObservabilityStore(config);
 
   async function handler(request: Request): Promise<Response> {
     const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID();
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const requestCapturePromise = captureRequest(request.clone(), requestId, startedAt);
+    let requestModel: string | undefined;
+    let response: Response;
     try {
-      const url = new URL(request.url);
-      const path = url.pathname;
-      let response: Response;
       if (request.method === 'OPTIONS') {
-        return withRequestId(optionsResponse(request), requestId);
+        response = optionsResponse(request);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (request.method === 'GET' && path === '/') {
         response = jsonResponse({
           object: 'gateway',
           name: 'relay',
-          endpoints: ['/health', '/v1/models', '/v1/chat/completions', '/v1/completions', '/v1/messages'],
+          endpoints: ['/health', '/v1/models', '/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/messages', '/v1/embeddings', '/v1/rerank', '/relay/capabilities', '/relay/stats'],
         });
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (request.method === 'GET' && path === '/health') {
         response = jsonResponse({ ok: true });
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
+      const relayAuthError = authorizeRelay(config, request, path);
+      if (relayAuthError) return finalizeResponse(relayAuthError, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       if (request.method === 'GET' && path === '/relay/capabilities') {
         response = jsonResponse(capabilities.get());
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (request.method === 'POST' && path === '/relay/capabilities/refresh') {
         response = jsonResponse(await capabilities.refresh());
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
+      }
+      if (request.method === 'GET' && path === '/relay/stats') {
+        response = jsonResponse(observability.stats());
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
+      }
+      if (request.method === 'GET' && path === '/relay/requests') {
+        response = jsonResponse({ object: 'list', data: observability.list() });
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
+      }
+      const requestMatch = path.match(/^\/relay\/requests\/([^/]+)$/);
+      if (request.method === 'GET' && requestMatch) {
+        const requestEntryId = decodeURIComponent(requestMatch[1]);
+        const entry = observability.get(requestEntryId);
+        if (!entry) throw new GatewayError(404, `Request ${requestEntryId} was not found`);
+        response = jsonResponse(entry);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (path === '/v1/messages/count_tokens') {
         if (request.method === 'POST') response = await handleAnthropicCountTokens(config, request);
         else response = jsonResponse({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, 404);
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (path === '/v1/messages') {
         if (request.method === 'POST') response = await handleAnthropicMessages(config, request);
         else response = jsonResponse({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, 404);
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       const authError = authorizeOpenAI(config, request, path);
-      if (authError) return withRequestId(authError, requestId);
+      if (authError) return finalizeResponse(authError, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       if (isUnsupportedOpenAIEndpoint(path)) {
-        return withRequestId(unsupportedEndpoint(path), requestId);
+        return finalizeResponse(unsupportedEndpoint(path), requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (request.method === 'GET' && path === '/v1/models') {
         response = await handleModels(config);
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       const modelMatch = path.match(/^\/v1\/models\/([^/]+)$/);
       if (request.method === 'GET' && modelMatch) {
         response = await handleModels(config, decodeURIComponent(modelMatch[1]));
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (path === '/v1/chat/completions') {
         if (request.method === 'POST') {
-          response = await createChatCompletion(config, store, await readJson(request));
-          return withRequestId(response, requestId);
+          const body = await readJson(request);
+          requestModel = readRequestModel(body);
+          response = await createChatCompletion(config, store, body);
+          return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
         }
         if (request.method === 'GET') {
           response = listStoredCompletions(store, url);
-          return withRequestId(response, requestId);
+          return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
         }
       }
       if (path === '/v1/completions' && request.method === 'POST') {
-        response = await createCompletionShim(config, store, await readJson(request));
-        return withRequestId(response, requestId);
+        const body = await readJson(request);
+        requestModel = readRequestModel(body);
+        response = await createCompletionShim(config, store, body);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (path === '/v1/responses' && request.method === 'POST') {
-        response = await createResponse(config, responseStore, await readJson(request));
-        return withRequestId(response, requestId);
+        const body = await readJson(request);
+        requestModel = readRequestModel(body);
+        response = await createResponse(config, responseStore, body);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
+      }
+      if (path === '/v1/embeddings' && request.method === 'POST') {
+        const body = await readJson(request);
+        requestModel = readRequestModel(body);
+        response = await createEmbedding(config, body);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
+      }
+      if ((path === '/v1/rerank' || path === '/rerank') && request.method === 'POST') {
+        const body = await readJson(request);
+        requestModel = readRequestModel(body);
+        response = await createRerank(config, { ...(isObject(body) ? body : {}), upstream_path: path });
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       const responseMatch = path.match(/^\/v1\/responses\/([^/]+)$/);
       if (responseMatch) {
@@ -101,12 +146,12 @@ export function createApp(config: AppConfig): App {
         if (request.method === 'GET') response = getResponse(responseStore, id);
         else if (request.method === 'DELETE') response = deleteResponse(responseStore, id);
         else response = openAIError(404, 'Not found');
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       const messageMatch = path.match(/^\/v1\/chat\/completions\/([^/]+)\/messages$/);
       if (request.method === 'GET' && messageMatch) {
         response = getStoredMessages(store, decodeURIComponent(messageMatch[1]), url);
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       const completionMatch = path.match(/^\/v1\/chat\/completions\/([^/]+)$/);
       if (completionMatch) {
@@ -115,15 +160,87 @@ export function createApp(config: AppConfig): App {
         else if (request.method === 'POST') response = await updateStoredCompletion(store, id, await readJson(request));
         else if (request.method === 'DELETE') response = deleteStoredCompletion(store, id);
         else response = openAIError(404, 'Not found');
-        return withRequestId(response, requestId);
+        return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
-      return withRequestId(openAIError(404, 'Not found'), requestId);
+      return finalizeResponse(openAIError(404, 'Not found'), requestId, path, request.method, startedAt, startedAtMs, requestModel);
     } catch (error) {
       logger.error('request failed', {
         request_id: requestId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return withRequestId(errorResponse(error), requestId);
+      response = errorResponse(error);
+      return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
+    }
+
+    async function finalizeResponse(
+      currentResponse: Response,
+      currentRequestId: string,
+      currentPath: string,
+      method: string,
+      startedIso: string,
+      startedMs: number,
+      model: string | undefined,
+    ): Promise<Response> {
+      const finalResponse = withRelayHeaders(currentResponse, currentRequestId, config);
+      await recordObservation(finalResponse.clone(), currentRequestId, currentPath, method, startedIso, startedMs, model);
+      return finalResponse;
+    }
+
+    async function recordObservation(
+      currentResponse: Response,
+      currentRequestId: string,
+      currentPath: string,
+      method: string,
+      startedIso: string,
+      startedMs: number,
+      model: string | undefined,
+    ): Promise<void> {
+      try {
+        const durationMs = Date.now() - startedMs;
+        const streaming = (currentResponse.headers.get('content-type') ?? '').includes('text/event-stream');
+        const requestCapture = await requestCapturePromise;
+        const summaryBase = {
+          request_id: currentRequestId,
+          started_at: startedIso,
+          completed_at: new Date().toISOString(),
+          duration_ms: durationMs,
+          client_protocol: detectProtocol(currentPath),
+          route: routeLabel(currentPath),
+          method,
+          model,
+          model_profile: config.modelProfile,
+          http_status: currentResponse.status,
+          streaming,
+          tool_call_count: 0,
+          tool_parse_error_count: 0,
+          stripped_field_count: currentResponse.headers.has('x-relay-warning') ? 1 : 0,
+        } as const;
+        let payload: any;
+        if (!streaming) {
+          payload = await currentResponse.json().catch(() => undefined);
+        }
+        const detail = extractObservabilityFields(payload);
+        const errorSource = classifyErrorSource(detail.error_type, detail.error_code);
+        const summary = {
+          ...summaryBase,
+          ...detail,
+          request: requestCapture,
+          response: {
+            status_code: currentResponse.status,
+            streaming,
+            error_type: detail.error_type,
+            error_code: detail.error_code ?? null,
+            error_source: errorSource,
+          },
+        };
+        if (streaming) {
+          observability.record(summary);
+          return;
+        }
+        observability.record(summary);
+      } catch {
+        // Never fail the request because observability bookkeeping did.
+      }
     }
   }
 
@@ -160,7 +277,7 @@ export function createApp(config: AppConfig): App {
             request_id: requestId,
             error: error instanceof Error ? error.message : String(error),
           });
-          await writeWebResponse(res, withRequestId(errorResponse(error), requestId));
+          await writeWebResponse(res, withRelayHeaders(errorResponse(error), requestId, config));
         }
       });
       await new Promise<void>((resolve) => server.listen(config.port, config.host, resolve));
@@ -205,9 +322,10 @@ function corsAllowHeaders(request: Request): string {
   return [...allowed].join(',');
 }
 
-function withRequestId(response: Response, requestId: string): Response {
+function withRelayHeaders(response: Response, requestId: string, config: AppConfig): Response {
   response.headers.set('x-request-id', requestId);
   response.headers.set('x-relay-request-id', requestId);
+  response.headers.set('x-relay-model-profile', activeProfile(config).id);
   return response;
 }
 
@@ -226,7 +344,15 @@ function isUnsupportedOpenAIEndpoint(path: string): boolean {
 }
 
 function authorizeOpenAI(config: AppConfig, request: Request, path: string): Response | undefined {
-  if (!config.apiKey || !path.startsWith('/v1/')) return undefined;
+  if (!config.apiKey || (!path.startsWith('/v1/') && path !== '/rerank')) return undefined;
+  const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const xKey = request.headers.get('x-api-key');
+  if (hasValidApiKey(config.apiKey, bearer, xKey)) return undefined;
+  return openAIError(401, 'Unauthorized', 'authentication_error');
+}
+
+function authorizeRelay(config: AppConfig, request: Request, path: string): Response | undefined {
+  if (!config.apiKey || !path.startsWith('/relay/')) return undefined;
   const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
   const xKey = request.headers.get('x-api-key');
   if (hasValidApiKey(config.apiKey, bearer, xKey)) return undefined;
@@ -274,6 +400,38 @@ function contentLength(req: IncomingMessage): number | undefined {
 function nodeHeaderValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
   return value;
+}
+
+function readRequestModel(body: unknown): string | undefined {
+  return isObject(body) && typeof body.model === 'string' ? body.model : undefined;
+}
+
+function extractObservabilityFields(payload: any) {
+  if (!payload || typeof payload !== 'object') return {};
+  if (payload.error && typeof payload.error === 'object') {
+    return {
+      error_type: payload.error.type,
+      error_code: payload.error.code ?? null,
+    };
+  }
+  if (payload.type === 'error' && payload.error && typeof payload.error === 'object') {
+    return {
+      error_type: payload.error.type,
+      error_code: null,
+    };
+  }
+  const usage = payload.usage && typeof payload.usage === 'object' ? payload.usage : undefined;
+  return {
+    prompt_tokens: usage?.prompt_tokens ?? usage?.input_tokens,
+    completion_tokens: usage?.completion_tokens ?? usage?.output_tokens,
+    total_tokens: usage?.total_tokens,
+    stop_reason: payload.stop_reason ?? payload.choices?.[0]?.finish_reason ?? null,
+    tool_call_count: Array.isArray(payload.choices?.[0]?.message?.tool_calls) ? payload.choices[0].message.tool_calls.length : 0,
+  };
+}
+
+function isObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function writeWebResponse(res: ServerResponse, response: Response) {

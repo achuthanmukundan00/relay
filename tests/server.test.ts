@@ -25,7 +25,18 @@ test('GET / returns gateway metadata for agent probes', async () => {
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.object, 'gateway');
-    assert.deepEqual(body.endpoints, ['/health', '/v1/models', '/v1/chat/completions', '/v1/completions', '/v1/messages']);
+    assert.deepEqual(body.endpoints, [
+      '/health',
+      '/v1/models',
+      '/v1/chat/completions',
+      '/v1/completions',
+      '/v1/responses',
+      '/v1/messages',
+      '/v1/embeddings',
+      '/v1/rerank',
+      '/relay/capabilities',
+      '/relay/stats',
+    ]);
   });
 });
 
@@ -92,6 +103,14 @@ test('capability endpoints expose and refresh upstream model state', async () =>
         sendJson(res, 200, { tokens: [1, 2] });
         return;
       }
+      if (req.url === '/v1/embeddings') {
+        sendJson(res, 200, { object: 'list', data: [{ embedding: [0.1, 0.2], index: 0 }], model: 'llama' });
+        return;
+      }
+      if (req.url === '/v1/rerank') {
+        sendJson(res, 200, { results: [{ index: 0, relevance_score: 0.9 }], model: 'llama' });
+        return;
+      }
       assert.fail(`unexpected upstream path ${req.url}`);
     };
     const app = createApp(testConfig(upstream.url));
@@ -104,14 +123,16 @@ test('capability endpoints expose and refresh upstream model state', async () =>
     assert.equal(refreshed.status, 200);
     const body = await refreshed.json();
     assert.equal(body.upstream.reachable, true);
-    assert.equal(body.upstream.health, 'available');
-    assert.equal(body.models.list, 'available');
+    assert.equal(body.upstream.health, 'supported');
+    assert.equal(body.models.list, 'supported');
     assert.equal(body.models.currentModel, 'llama');
-    assert.equal(body.endpoints.chatCompletions, 'implemented');
-    assert.equal(body.endpoints.embeddings, 'unsupported');
-    assert.equal(body.features.chatCompletions, 'available');
-    assert.equal(body.features.tokenization, 'available');
+    assert.equal(body.endpoints.chatCompletions, 'supported');
+    assert.equal(body.endpoints.embeddings, 'supported');
+    assert.equal(body.endpoints.rerank, 'supported');
+    assert.equal(body.features.chatCompletions, 'supported');
+    assert.equal(body.features.tokenization, 'supported');
     assert.equal(body.features.multimodalInput, 'unknown');
+    assert.equal(body.profile.id, 'generic');
   });
 });
 
@@ -123,8 +144,8 @@ test('capability refresh marks upstream offline without failing Relay', async ()
   const body = await refreshed.json();
   assert.equal(body.upstream.reachable, false);
   assert.equal(body.models.list, 'unknown');
-  assert.equal(body.endpoints.responses, 'implemented');
-  assert.equal(body.endpoints.rerank, 'unsupported');
+  assert.equal(body.endpoints.responses, 'supported');
+  assert.equal(body.endpoints.rerank, 'unknown');
   assert.equal(body.features.chatCompletions, 'unknown');
 });
 
@@ -143,7 +164,7 @@ test('capability refresh does not overclaim when upstream only serves models', a
     const refreshed = await app.fetch('/relay/capabilities/refresh', { method: 'POST' });
     const body = await refreshed.json();
     assert.equal(body.upstream.reachable, true);
-    assert.equal(body.models.list, 'available');
+    assert.equal(body.models.list, 'supported');
     assert.equal(body.features.chatCompletions, 'unsupported');
     assert.equal(body.features.tokenization, 'unsupported');
   });
@@ -747,6 +768,12 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     unknownFieldPolicy: 'pass_through',
     strictCompat: false,
     warnOnStrippedFields: true,
+    modelProfile: 'generic',
+    reasoningMode: 'off',
+    toolMode: 'auto',
+    observabilityEnabled: true,
+    logPrompts: false,
+    requestHistoryLimit: 100,
   };
 }
 

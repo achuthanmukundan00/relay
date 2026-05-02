@@ -61,6 +61,24 @@ export function unsupportedCapabilityError(message: string): GatewayError {
   return new GatewayError(400, message, 'unsupported_capability', 'unsupported_capability');
 }
 
+export function embeddingsUnsupportedError(): GatewayError {
+  return new GatewayError(
+    400,
+    'Embeddings are not available from the current llama.cpp upstream. Start llama.cpp with embedding support and an embedding-capable model.',
+    'unsupported_capability',
+    'embeddings_unsupported',
+  );
+}
+
+export function rerankUnsupportedError(): GatewayError {
+  return new GatewayError(
+    400,
+    'Rerank is not available from the current llama.cpp upstream. Start llama.cpp with rerank support and a rerank-capable model.',
+    'unsupported_capability',
+    'rerank_unsupported',
+  );
+}
+
 export function upstreamError(kind: 'unavailable' | 'timeout' | 'bad_response' | 'stream_interrupted', message: string): GatewayError {
   return new GatewayError(statusForUpstream(kind), message, 'upstream_error', codeForUpstream(kind));
 }

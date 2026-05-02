@@ -4,7 +4,7 @@ import { unsupportedCapabilityError, unsupportedParameterError } from './errors.
 type JsonObject = Record<string, any>;
 
 export type FieldPolicyAction = 'map' | 'pass_through' | 'strip' | 'reject';
-export type ProtocolName = 'openai_chat' | 'openai_responses' | 'anthropic_messages';
+export type ProtocolName = 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'embeddings' | 'rerank';
 
 export type FieldPolicyResult = {
   body: JsonObject;
@@ -39,6 +39,12 @@ const protocolPolicies: Record<ProtocolName, Record<string, FieldPolicyAction>> 
     ], 'map'),
     thinking: 'strip',
   },
+  embeddings: entries([
+    'model', 'input', 'encoding_format', 'dimensions', 'user',
+  ], 'map'),
+  rerank: entries([
+    'model', 'query', 'documents', 'top_n', 'top_k', 'return_documents', 'upstream_path',
+  ], 'map'),
 };
 
 export function applyFieldPolicy(protocol: ProtocolName, input: JsonObject, config: AppConfig): FieldPolicyResult {
