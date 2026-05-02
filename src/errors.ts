@@ -3,13 +3,22 @@ export class GatewayError extends Error {
   type: string;
   code: string | null;
   param: string | null;
+  upstreamStatus: number | null;
 
-  constructor(status: number, message: string, type = 'invalid_request_error', code: string | null = null, param: string | null = null) {
+  constructor(
+    status: number,
+    message: string,
+    type = 'invalid_request_error',
+    code: string | null = null,
+    param: string | null = null,
+    upstreamStatus: number | null = null,
+  ) {
     super(message);
     this.status = status;
     this.type = type;
     this.code = code;
     this.param = param;
+    this.upstreamStatus = upstreamStatus;
   }
 }
 
@@ -85,7 +94,11 @@ export function upstreamError(kind: 'unavailable' | 'timeout' | 'bad_response' |
 
 export function errorResponse(error: unknown): Response {
   if (error instanceof GatewayError) {
-    return openAIError(error.status, error.message, error.type, error.code, error.param);
+    const response = openAIError(error.status, error.message, error.type, error.code, error.param);
+    if (typeof error.upstreamStatus === 'number') {
+      response.headers.set('x-relay-upstream-status', String(error.upstreamStatus));
+    }
+    return response;
   }
   return openAIError(500, 'Internal gateway error', 'internal_error', 'internal_error');
 }

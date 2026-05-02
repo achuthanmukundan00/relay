@@ -8,6 +8,7 @@ export type RequestCapture = {
   method: string;
   path: string;
   route: string;
+  client: string | null;
   client_protocol: 'openai' | 'anthropic' | 'relay' | 'generic';
   timestamp: string;
   streaming: boolean;
@@ -24,6 +25,7 @@ export type RequestCapture = {
 
 export type ResponseCapture = {
   status_code: number;
+  upstream_status?: number | null;
   streaming: boolean;
   error_type?: string;
   error_code?: string | null;
@@ -41,9 +43,11 @@ export type FailureClassification =
 
 export type RequestSummary = {
   request_id: string;
+  endpoint: string;
   started_at: string;
   completed_at: string;
   duration_ms: number;
+  client: string | null;
   client_protocol: 'openai' | 'anthropic' | 'relay' | 'generic';
   route: string;
   method: string;
@@ -60,6 +64,7 @@ export type RequestSummary = {
   stripped_field_count: number;
   error_type?: string;
   error_code?: string | null;
+  upstream_status?: number | null;
   error_source?: 'upstream' | 'relay' | null;
   failure_classification?: FailureClassification | null;
   request: RequestCapture;
@@ -203,6 +208,7 @@ export async function captureRequest(request: Request, requestId: string, timest
     method: request.method,
     path: new URL(request.url).pathname,
     route: routeLabel(new URL(request.url).pathname),
+    client: request.headers.get('user-agent'),
     client_protocol: detectProtocol(new URL(request.url).pathname),
     timestamp,
     streaming,

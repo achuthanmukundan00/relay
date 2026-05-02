@@ -1,0 +1,64 @@
+[
+  {
+    "name": "client_request_incompatibility",
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "body_fixture": "client-request-incompatibility.json",
+    "expected_status": 400,
+    "expected_error_type": "invalid_request_error",
+    "expected_error_code": "missing_required_field",
+    "expected_classification": "client_request_incompatibility"
+  },
+  {
+    "name": "relay_compatibility_bug",
+    "mode": "classification-only",
+    "error_type": "internal_error",
+    "error_code": "internal_error",
+    "http_status": 500,
+    "expected_classification": "relay_compatibility_bug"
+  },
+  {
+    "name": "upstream_model_failure",
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "body_fixture": "standard-chat-request.json",
+    "upstream_fixture": "non-openai-compatible-error",
+    "expected_status": 502,
+    "expected_error_type": "upstream_error",
+    "expected_error_code": "upstream_unavailable",
+    "expected_classification": "upstream_model_failure",
+    "expected_upstream_status": 503
+  },
+  {
+    "name": "low_quant_malformed_output",
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "body_fixture": "standard-chat-request.json",
+    "upstream_fixture": "unsupported-tool-call-shape",
+    "expected_status": 502,
+    "expected_error_type": "upstream_error",
+    "expected_error_code": "upstream_bad_response",
+    "expected_classification": "low_quant_malformed_output"
+  },
+  {
+    "name": "hardware_resource_timeout",
+    "path": "/v1/chat/completions",
+    "method": "POST",
+    "body_fixture": "standard-chat-request.json",
+    "upstream_fixture": "timeout",
+    "expected_status": 504,
+    "expected_error_type": "upstream_error",
+    "expected_error_code": "upstream_timeout",
+    "expected_classification": "hardware_resource_timeout"
+  },
+  {
+    "name": "cloudflare_auth_failure",
+    "path": "/v1/models",
+    "method": "GET",
+    "api_key": "secret",
+    "expected_status": 401,
+    "expected_error_type": "authentication_error",
+    "expected_error_code": "invalid_api_key",
+    "expected_classification": "cloudflare_auth_failure"
+  }
+]

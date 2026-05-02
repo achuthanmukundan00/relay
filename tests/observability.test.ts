@@ -107,10 +107,13 @@ test('request detail returns the recorded summary when still inside the history 
     const detail = await app.fetch(`/relay/requests/${requestId}`);
     assert.equal(detail.status, 200);
     const body = await detail.json();
+    assert.equal(body.endpoint, '/v1/chat/completions');
+    assert.equal(body.client, null);
     assert.equal(body.route, '/v1/chat/completions');
     assert.equal(body.model, 'llama');
     assert.equal(body.prompt_tokens, 2);
     assert.equal(body.total_tokens, 3);
+    assert.equal(body.upstream_status ?? null, null);
     assert.equal(body.failure_classification ?? null, null);
   });
 });
@@ -136,6 +139,7 @@ test('observability records upstream timeout and auth failures with the local-ag
       headers: { authorization: 'Bearer secret' },
     });
     const body = await requests.json();
+    assert.doesNotMatch(JSON.stringify(body), /Bearer secret/);
     const classifications = body.data.map((entry: any) => entry.failure_classification).filter(Boolean);
     assert.equal(classifications.includes('cloudflare_auth_failure'), true);
     assert.equal(classifications.includes('hardware_resource_timeout'), true);

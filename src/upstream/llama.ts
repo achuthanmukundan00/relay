@@ -1,4 +1,4 @@
-import { upstreamError } from '../errors.ts';
+import { GatewayError, upstreamError } from '../errors.ts';
 import type { AppConfig } from '../config.ts';
 
 export type UpstreamResult = {
@@ -44,7 +44,14 @@ export async function upstreamFetch(config: AppConfig, path: string, init: Reque
 
 export async function upstreamHttpError(response: Response) {
   const detail = await readUpstreamErrorDetail(response);
-  return upstreamError('unavailable', detail ?? `Upstream llama server returned HTTP ${response.status}`);
+  return new GatewayError(
+    502,
+    detail ?? `Upstream llama server returned HTTP ${response.status}`,
+    'upstream_error',
+    'upstream_unavailable',
+    null,
+    response.status,
+  );
 }
 
 function upstreamUrl(baseUrl: string, path: string): string {

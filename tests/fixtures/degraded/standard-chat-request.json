@@ -1,0 +1,10 @@
+{
+  "model": "llama",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Say OK"
+    }
+  ],
+  "max_tokens": 16
+}

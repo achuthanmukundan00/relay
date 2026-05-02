@@ -1,14 +1,13 @@
 {
   "name": "relay",
   "version": "0.1.0",
+  "description": "Lightweight OpenAI/Anthropic-compatible gateway for local llama.cpp models.",
   "type": "module",
-  "private": true,
   "scripts": {
     "start": "node --experimental-strip-types src/main.ts",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "verify": "npm test && npm run typecheck",
-    "smoke:all": "node --experimental-strip-types scripts/smoke-all.ts",
     "doctor": "node --experimental-strip-types scripts/doctor.ts"
   },
   "engines": {

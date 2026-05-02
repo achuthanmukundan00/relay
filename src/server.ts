@@ -201,9 +201,11 @@ export function createApp(config: AppConfig): App {
         const requestCapture = await requestCapturePromise;
         const summaryBase = {
           request_id: currentRequestId,
+          endpoint: currentPath,
           started_at: startedIso,
           completed_at: new Date().toISOString(),
           duration_ms: durationMs,
+          client: requestCapture.client,
           client_protocol: detectProtocol(currentPath),
           route: routeLabel(currentPath),
           method,
@@ -222,13 +224,16 @@ export function createApp(config: AppConfig): App {
         const detail = extractObservabilityFields(payload);
         const errorSource = classifyErrorSource(detail.error_type, detail.error_code);
         const failureClassification = classifyFailure(detail.error_type, detail.error_code, currentResponse.status);
+        const upstreamStatus = readUpstreamStatus(currentResponse);
         const summary = {
           ...summaryBase,
           ...detail,
+          upstream_status: upstreamStatus,
           failure_classification: failureClassification,
           request: requestCapture,
           response: {
             status_code: currentResponse.status,
+            upstream_status: upstreamStatus,
             streaming,
             error_type: detail.error_type,
             error_code: detail.error_code ?? null,
@@ -431,6 +436,13 @@ function extractObservabilityFields(payload: any) {
     stop_reason: payload.stop_reason ?? payload.choices?.[0]?.finish_reason ?? null,
     tool_call_count: Array.isArray(payload.choices?.[0]?.message?.tool_calls) ? payload.choices[0].message.tool_calls.length : 0,
   };
+}
+
+function readUpstreamStatus(response: Response): number | null {
+  const header = response.headers.get('x-relay-upstream-status');
+  if (!header) return null;
+  const value = Number.parseInt(header, 10);
+  return Number.isFinite(value) ? value : null;
 }
 
 function isObject(value: unknown): value is Record<string, any> {
