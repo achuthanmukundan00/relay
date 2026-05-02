@@ -1,0 +1,13 @@
+import { _ as _export_sfc, o as openBlock, c as createElementBlock, ae as createStaticVNode } from "./chunks/framework.CaVXODBr.js";
+const __pageData = JSON.parse('{"title":"API Compatibility","description":"","frontmatter":{},"headers":[],"relativePath":"api-compatibility.md","filePath":"api-compatibility.md"}');
+const _sfc_main = { name: "api-compatibility.md" };
+function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
+  return openBlock(), createElementBlock("div", null, [..._cache[0] || (_cache[0] = [
+    createStaticVNode('<h1 id="api-compatibility" tabindex="-1">API Compatibility <a class="header-anchor" href="#api-compatibility" aria-label="Permalink to &quot;API Compatibility&quot;">​</a></h1><p>Relay targets practical compatibility for local model servers, not vendor-complete parity.</p><h2 id="supported-endpoints" tabindex="-1">Supported Endpoints <a class="header-anchor" href="#supported-endpoints" aria-label="Permalink to &quot;Supported Endpoints&quot;">​</a></h2><ul><li><code>GET /health</code></li><li><code>GET /v1/models</code></li><li><code>GET /v1/models/:model</code></li><li><code>POST /v1/chat/completions</code></li><li><code>POST /v1/completions</code></li><li><code>POST /v1/responses</code></li><li><code>GET /v1/responses/:id</code></li><li><code>DELETE /v1/responses/:id</code></li><li><code>POST /v1/messages</code></li><li><code>POST /v1/messages/count_tokens</code></li><li><code>POST /v1/embeddings</code></li><li><code>POST /v1/rerank</code></li><li><code>POST /rerank</code></li><li><code>GET /relay/capabilities</code></li><li><code>POST /relay/capabilities/refresh</code></li><li><code>GET /relay/stats</code></li><li><code>GET /relay/requests</code></li><li><code>GET /relay/requests/:id</code></li></ul><h2 id="non-goals" tabindex="-1">Non-Goals <a class="header-anchor" href="#non-goals" aria-label="Permalink to &quot;Non-Goals&quot;">​</a></h2><ul><li>Hosted assistants/threads/runs orchestration</li><li>Realtime APIs</li><li>Image/audio/file APIs</li><li>Full vendor control-plane semantics</li></ul><h2 id="behavior-notes" tabindex="-1">Behavior Notes <a class="header-anchor" href="#behavior-notes" aria-label="Permalink to &quot;Behavior Notes&quot;">​</a></h2><ul><li>Unknown/hosted-only fields are governed by field policy settings.</li><li>Streaming output is normalized to protocol-appropriate SSE.</li><li>Capability endpoints expose unsupported/degraded areas at runtime.</li></ul>', 8)
+  ])]);
+}
+const apiCompatibility = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render]]);
+export {
+  __pageData,
+  apiCompatibility as default
+};

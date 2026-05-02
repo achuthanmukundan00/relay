@@ -1,0 +1,17 @@
+[Unit]
+Description=Relay Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+WorkingDirectory=/opt/relay
+EnvironmentFile=/etc/relay/relay.env
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
