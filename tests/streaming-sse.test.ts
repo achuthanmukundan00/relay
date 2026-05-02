@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import test from 'node:test';
 
 import type { AppConfig } from '../src/config.ts';
-import { anthropicEventsToOpenAIChunks, encodeSSE, parseSSEStream } from '../src/normalize/stream.ts';
+import { anthropicEventsToOpenAIChunks, encodeSSE, parseSSEJson, parseSSEStream } from '../src/normalize/stream.ts';
 import { createApp } from '../src/server.ts';
 
 test('encodeSSE emits provider-compatible SSE frames', () => {
@@ -27,6 +27,37 @@ test('OpenAI streaming appends DONE when upstream disconnects without it', async
     const text = await response.text();
     assert.match(text, /"content":"hi"/);
     assert.match(text, /data: \[DONE\]\n\n$/);
+  });
+});
+
+test('OpenAI streaming emits JSON-parsable SSE chunks before DONE', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n');
+      res.end('data: [DONE]\n\n');
+    };
+
+    const response = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: { model: 'llama', stream: true, messages: [{ role: 'user', content: 'hi' }] },
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    let jsonFrames = 0;
+    let sawDone = false;
+    for await (const frame of parseSSEStream(response.body!)) {
+      if (frame.data === '[DONE]') {
+        sawDone = true;
+        continue;
+      }
+      const chunk = parseSSEJson(frame);
+      assert.equal(chunk.object, 'chat.completion.chunk');
+      jsonFrames += 1;
+    }
+    assert.equal(jsonFrames, 1);
+    assert.equal(sawDone, true);
   });
 });
 
@@ -155,6 +186,12 @@ function testConfig(upstreamBaseUrl: string): AppConfig {
     logLevel: 'silent',
     completionTtlMs: 3_600_000,
     maxRequestBodyBytes: 1_048_576,
+    probeOnStartup: true,
+    strictStartup: false,
+    probeTimeoutMs: 3_000,
+    unknownFieldPolicy: 'pass_through',
+    strictCompat: false,
+    warnOnStrippedFields: true,
   };
 }
 
