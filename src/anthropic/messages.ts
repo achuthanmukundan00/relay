@@ -213,18 +213,50 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
   const messageId = `msg_${crypto.randomUUID()}`;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const iterator = parseSSEStream(upstream.response.body!)[Symbol.asyncIterator]();
+      let firstFrame: { event?: string; data: string } | undefined;
+      let startUsage = { input_tokens: 0, output_tokens: 0 };
+      try {
+        const first = await iterator.next();
+        if (!first.done) {
+          firstFrame = first.value;
+          if (firstFrame.data !== '[DONE]') {
+            const firstChunk = parseSSEJson(firstFrame);
+            const usage = openAIUsageToAnthropicUsage(firstChunk?.usage);
+            if (usage.input_tokens !== undefined) startUsage.input_tokens = usage.input_tokens;
+            if (usage.output_tokens !== undefined) startUsage.output_tokens = usage.output_tokens;
+          }
+        }
+      } catch (error) {
+        controller.enqueue(encoder.encode(encodeSSE({
+          event: 'error',
+          data: {
+            type: 'error',
+            error: {
+              type: 'api_error',
+              message: error instanceof Error ? error.message : 'Upstream stream failed',
+            },
+          },
+        })));
+        controller.close();
+        return;
+      }
       controller.enqueue(encoder.encode(encodeSSE({ event: 'message_start', data: {
         type: 'message_start',
         message: { id: messageId, type: 'message', role: 'assistant', content: [], model: chatRequest.model },
+        usage: startUsage,
       } })));
       let textStarted = false;
       const startedBlocks = new Set<number>();
       let stopReason = 'end_turn';
       let failed = false;
+      let outputTokens = startUsage.output_tokens;
       try {
-        for await (const frame of parseSSEStream(upstream.response.body!)) {
+        for await (const frame of iterateFrames(firstFrame, iterator)) {
           if (frame.data === '[DONE]') break;
           const chunk = parseSSEJson(frame);
+          const usage = openAIUsageToAnthropicUsage(chunk?.usage);
+          if (usage.output_tokens !== undefined) outputTokens = usage.output_tokens;
           const choice = chunk.choices?.[0];
           const content = choice?.delta?.content;
           if (typeof content === 'string') {
@@ -284,7 +316,7 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
         controller.enqueue(encoder.encode(encodeSSE({ event: 'message_delta', data: {
           type: 'message_delta',
           delta: { stop_reason: stopReason, stop_sequence: null },
-          usage: {},
+          usage: { output_tokens: outputTokens },
         } })));
         controller.enqueue(encoder.encode(encodeSSE({ event: 'message_stop', data: { type: 'message_stop' } })));
       }
@@ -299,6 +331,25 @@ function mapStopReason(reason: unknown): string {
   if (reason === 'tool_calls' || reason === 'function_call') return 'tool_use';
   if (reason === 'content_filter') return 'stop_sequence';
   return 'end_turn';
+}
+
+async function* iterateFrames(
+  firstFrame: { event?: string; data: string } | undefined,
+  iterator: AsyncIterator<{ event?: string; data: string }>,
+): AsyncGenerator<{ event?: string; data: string }> {
+  if (firstFrame) yield firstFrame;
+  while (true) {
+    const next = await iterator.next();
+    if (next.done) return;
+    yield next.value;
+  }
+}
+
+function openAIUsageToAnthropicUsage(value: unknown): { input_tokens?: number; output_tokens?: number } {
+  if (!isObject(value)) return {};
+  const input_tokens = typeof value.prompt_tokens === 'number' ? value.prompt_tokens : undefined;
+  const output_tokens = typeof value.completion_tokens === 'number' ? value.completion_tokens : undefined;
+  return { input_tokens, output_tokens };
 }
 
 function anthropicCountTokensRequest(input: JsonObject, config: AppConfig): JsonObject {

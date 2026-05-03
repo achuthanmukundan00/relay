@@ -163,9 +163,9 @@ test('Anthropic streaming converts OpenAI chunks to message events', async () =>
   await withUpstream(async (upstream) => {
     upstream.handler = (_req, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n');
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":{"prompt_tokens":5,"completion_tokens":0,"total_tokens":5}}\n\n');
       res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
-      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n');
       res.end('data: [DONE]\n\n');
     };
 
@@ -178,9 +178,11 @@ test('Anthropic streaming converts OpenAI chunks to message events', async () =>
     assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
     const text = await response.text();
     assert.match(text, /event: message_start/);
+    assert.match(text, /"usage":\{"input_tokens":5,"output_tokens":0\}/);
     assert.match(text, /event: content_block_start/);
     assert.match(text, /event: content_block_delta/);
     assert.match(text, /event: message_delta/);
+    assert.match(text, /"usage":\{"output_tokens":2\}/);
     assert.match(text, /event: message_stop/);
     assert.doesNotMatch(text, /\[DONE\]/);
   });

@@ -585,7 +585,8 @@ test('unsupported custom tools return 400 without calling upstream', async () =>
 
 test('stream_options.include_usage is accepted and usage chunks are preserved when upstream provides them', async () => {
   await withUpstream(async (upstream) => {
-    upstream.handler = (_req, res) => {
+    upstream.handler = (_req, res, body) => {
+      assert.equal((body as any).stream_options?.include_usage, true);
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n');
       res.end('data: [DONE]\n\n');
@@ -601,6 +602,52 @@ test('stream_options.include_usage is accepted and usage chunks are preserved wh
     });
     assert.equal(res.status, 200);
     assert.match(await res.text(), /"usage"/);
+  });
+});
+
+test('streaming usage chunk is synthesized before [DONE] when include_usage is requested and upstream only provides usage on content chunks', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\n');
+      res.end('data: [DONE]\n\n');
+    };
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /"choices":\[\],"usage":\{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3\}/);
+    assert.match(text, /\[DONE\]/);
+  });
+});
+
+test('streaming usage chunk is not synthesized when include_usage is requested but upstream provides no usage', async () => {
+  await withUpstream(async (upstream) => {
+    upstream.handler = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"llama","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n');
+      res.end('data: [DONE]\n\n');
+    };
+    const res = await createApp(testConfig(upstream.url)).fetch('/v1/chat/completions', {
+      method: 'POST',
+      body: {
+        model: 'llama',
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.doesNotMatch(text, /"choices":\[\],"usage":/);
+    assert.match(text, /\[DONE\]/);
   });
 });
 

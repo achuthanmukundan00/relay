@@ -23,14 +23,31 @@ export function encodeSSE(frame: SSEFrame): string {
   return `${frame.event ? `event: ${frame.event}\n` : ''}data: ${data}\n\n`;
 }
 
-export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>, includeUsage = false): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       let sawDone = false;
+      let sawUsageOnlyChunk = false;
+      let latestUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+      let streamId: string | undefined;
+      let streamModel: string | undefined;
+      let streamCreated: number | undefined;
       try {
         for await (const frame of parseSSEStream(body)) {
           if (frame.data === '[DONE]') {
+            if (includeUsage && latestUsage && !sawUsageOnlyChunk) {
+              controller.enqueue(encoder.encode(encodeSSE({
+                data: {
+                  id: streamId ?? `chatcmpl-${crypto.randomUUID()}`,
+                  object: 'chat.completion.chunk',
+                  created: streamCreated ?? Math.floor(Date.now() / 1000),
+                  model: streamModel ?? 'unknown',
+                  choices: [],
+                  usage: latestUsage,
+                },
+              })));
+            }
             if (!sawDone) {
               sawDone = true;
               controller.enqueue(encoder.encode(encodeSSE({ data: '[DONE]' })));
@@ -38,13 +55,35 @@ export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>): Readab
             continue;
           }
           const chunk = parseSSEJson(frame, 'Upstream returned invalid streaming JSON');
+          if (isObject(chunk)) {
+            if (typeof chunk.id === 'string') streamId = chunk.id;
+            if (typeof chunk.model === 'string') streamModel = chunk.model;
+            if (typeof chunk.created === 'number') streamCreated = chunk.created;
+            const usage = normalizeOpenAIUsage(chunk.usage);
+            if (usage) latestUsage = usage;
+            if (usage && Array.isArray(chunk.choices) && chunk.choices.length === 0) sawUsageOnlyChunk = true;
+          }
           controller.enqueue(encoder.encode(encodeSSE({ event: frame.event, data: chunk })));
         }
       } catch {
         // OpenAI chat streams do not have a clean post-start error frame. Close
         // the stream with a single done marker instead of leaking malformed SSE.
       }
-      if (!sawDone) controller.enqueue(encoder.encode(encodeSSE({ data: '[DONE]' })));
+      if (!sawDone) {
+        if (includeUsage && latestUsage && !sawUsageOnlyChunk) {
+          controller.enqueue(encoder.encode(encodeSSE({
+            data: {
+              id: streamId ?? `chatcmpl-${crypto.randomUUID()}`,
+              object: 'chat.completion.chunk',
+              created: streamCreated ?? Math.floor(Date.now() / 1000),
+              model: streamModel ?? 'unknown',
+              choices: [],
+              usage: latestUsage,
+            },
+          })));
+        }
+        controller.enqueue(encoder.encode(encodeSSE({ data: '[DONE]' })));
+      }
       controller.close();
     },
   });
@@ -151,4 +190,21 @@ function parseSSEBlock(block: string): ParsedSSEFrame | undefined {
   }
   if (data.length === 0) return undefined;
   return { event, data: data.join('\n') };
+}
+
+function normalizeOpenAIUsage(value: unknown): { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined {
+  if (!isObject(value)) return undefined;
+  const promptTokens = typeof value.prompt_tokens === 'number' ? value.prompt_tokens : undefined;
+  const completionTokens = typeof value.completion_tokens === 'number' ? value.completion_tokens : undefined;
+  const totalTokens = typeof value.total_tokens === 'number' ? value.total_tokens : undefined;
+  if (promptTokens === undefined && completionTokens === undefined && totalTokens === undefined) return undefined;
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+  };
+}
+
+function isObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -185,6 +185,7 @@ function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: Jso
 }
 
 async function streamChatCompletion(config: AppConfig, body: JsonObject): Promise<Response> {
+  const includeUsage = isObject(body.stream_options) && body.stream_options.include_usage === true;
   const upstream = await upstreamFetch(config, '/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -199,7 +200,7 @@ async function streamChatCompletion(config: AppConfig, body: JsonObject): Promis
   if (!upstream.response.body) {
     throw upstreamError('bad_response', 'Upstream returned an empty stream');
   }
-  return new Response(ensureOpenAIStreamDone(upstream.response.body), {
+  return new Response(ensureOpenAIStreamDone(upstream.response.body, includeUsage), {
     status: 200,
     headers: streamHeaders(),
   });
