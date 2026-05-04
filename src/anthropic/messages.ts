@@ -3,26 +3,40 @@ import type { AppConfig } from '../config.ts';
 import { anthropicError, GatewayError, invalidJsonError, jsonResponse, missingRequiredFieldError, unsupportedCapabilityError, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { encodeSSE, parseSSEJson, parseSSEStream, streamHeaders } from '../normalize/stream.ts';
-import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
+import { upstreamFetch, upstreamHttpError } from '../upstream/llama.ts';
 import { anthropicMessagesRequestToCanonical } from '../internal/anthropic-messages.ts';
 import { canonicalToUpstreamChatRequest } from '../internal/openai-chat.ts';
 import { canonicalToAnthropicMessage, upstreamChatCompletionToCanonical } from '../internal/response.ts';
+import { createLogger } from '../logger.ts';
+import { detectProviderFormat, logInboundDiagnostics, logStreamingResponseDiagnostics, logUpstreamPayloadDiagnostics } from '../truncation-diagnostics.ts';
 
 type JsonObject = Record<string, any>;
 
 export async function handleAnthropicMessages(config: AppConfig, request: Request): Promise<Response> {
+  const logger = createLogger(config.logLevel);
   try {
     authorizeAnthropic(config, request);
-    const rawBody = await readJson(request);
+    const rawBody = await readJson(request, config.logLevel);
     const { body, strippedFields } = applyFieldPolicy('anthropic_messages', rawBody, config);
     const chatRequest = anthropicRequestToChat(body, config);
+    logUpstreamPayloadDiagnostics(logger, { route: '/v1/messages', upstream_route: '/v1/chat/completions', payload: chatRequest });
     if (body.stream === true) return withFieldWarning(await streamAnthropicMessage(config, chatRequest), strippedFields, config);
-    const chat = await upstreamJson(config, '/v1/chat/completions', {
+    const upstreamRes = await upstreamFetch(config, '/v1/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(chatRequest),
     });
-    return withFieldWarning(jsonResponse(chatCompletionToAnthropicMessage(chat, body.model)), strippedFields, config);
+    if (!upstreamRes.response.ok) throw await upstreamHttpError(upstreamRes.response);
+    const upstreamText = await upstreamRes.response.text();
+    let chat: unknown;
+    try {
+      chat = JSON.parse(upstreamText);
+    } catch {
+      throw upstreamError('bad_response', 'Upstream returned invalid JSON');
+    }
+    const out = withFieldWarning(jsonResponse(chatCompletionToAnthropicMessage(chat, body.model)), strippedFields, config);
+    out.headers.set('x-relay-internal-upstream-bytes', String(Buffer.byteLength(upstreamText)));
+    return out;
   } catch (error) {
     return anthropicErrorResponse(error);
   }
@@ -31,7 +45,7 @@ export async function handleAnthropicMessages(config: AppConfig, request: Reques
 export async function handleAnthropicCountTokens(config: AppConfig, request: Request): Promise<Response> {
   try {
     authorizeAnthropic(config, request);
-    const rawBody = await readJson(request);
+    const rawBody = await readJson(request, config.logLevel);
     const { body } = applyFieldPolicy('anthropic_messages', rawBody, config);
     const tokenizerRequest = anthropicCountTokensRequest(body, config);
     const upstream = await upstreamFetch(config, '/tokenize', {
@@ -62,10 +76,18 @@ function authorizeAnthropic(config: AppConfig, request: Request): void {
   throw new GatewayError(401, 'Unauthorized', 'authentication_error');
 }
 
-async function readJson(request: Request): Promise<JsonObject> {
+async function readJson(request: Request, logLevel: string): Promise<JsonObject> {
+  const logger = createLogger(logLevel);
   try {
     const body = await request.json();
     if (!isObject(body)) throw new Error('not object');
+    logInboundDiagnostics(logger, {
+      route: new URL(request.url).pathname,
+      provider_format: detectProviderFormat(new URL(request.url).pathname),
+      content_length_header: request.headers.get('content-length'),
+      raw_body_bytes: parseHeaderInt(request.headers.get('x-relay-internal-raw-body-bytes')),
+      parsed_body: body,
+    });
     return body;
   } catch {
     throw invalidJsonError();
@@ -201,6 +223,7 @@ function chatCompletionToAnthropicMessage(chat: unknown, requestedModel: unknown
 }
 
 async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject): Promise<Response> {
+  const logger = createLogger(config.logLevel);
   const upstream = await upstreamFetch(config, '/v1/chat/completions', {
     method: 'POST',
     headers: { accept: 'text/event-stream', 'content-type': 'application/json' },
@@ -211,6 +234,17 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
   }
   const encoder = new TextEncoder();
   const messageId = `msg_${crypto.randomUUID()}`;
+  let upstreamEvents = 0;
+  let downstreamEvents = 0;
+  let upstreamBytes = 0;
+  let downstreamBytes = 0;
+  let sawDone = false;
+  let endedCleanly = false;
+  const enqueue = (controller: ReadableStreamDefaultController<Uint8Array>, chunk: string) => {
+    downstreamEvents += 1;
+    downstreamBytes += Buffer.byteLength(chunk);
+    controller.enqueue(encoder.encode(chunk));
+  };
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const iterator = parseSSEStream(upstream.response.body!)[Symbol.asyncIterator]();
@@ -220,6 +254,9 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
         const first = await iterator.next();
         if (!first.done) {
           firstFrame = first.value;
+          upstreamEvents += 1;
+          upstreamBytes += Buffer.byteLength(firstFrame.data) + (firstFrame.event ? Buffer.byteLength(firstFrame.event) : 0);
+          if (firstFrame.data === '[DONE]') sawDone = true;
           if (firstFrame.data !== '[DONE]') {
             const firstChunk = parseSSEJson(firstFrame);
             const usage = openAIUsageToAnthropicUsage(firstChunk?.usage);
@@ -228,7 +265,7 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
           }
         }
       } catch (error) {
-        controller.enqueue(encoder.encode(encodeSSE({
+        enqueue(controller, encodeSSE({
           event: 'error',
           data: {
             type: 'error',
@@ -237,15 +274,16 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
               message: error instanceof Error ? error.message : 'Upstream stream failed',
             },
           },
-        })));
+        }));
+        endedCleanly = false;
         controller.close();
         return;
       }
-      controller.enqueue(encoder.encode(encodeSSE({ event: 'message_start', data: {
+      enqueue(controller, encodeSSE({ event: 'message_start', data: {
         type: 'message_start',
         message: { id: messageId, type: 'message', role: 'assistant', content: [], model: chatRequest.model },
         usage: startUsage,
-      } })));
+      } }));
       let textStarted = false;
       const startedBlocks = new Set<number>();
       let stopReason = 'end_turn';
@@ -253,6 +291,9 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
       let outputTokens = startUsage.output_tokens;
       try {
         for await (const frame of iterateFrames(firstFrame, iterator)) {
+          upstreamEvents += 1;
+          upstreamBytes += Buffer.byteLength(frame.data) + (frame.event ? Buffer.byteLength(frame.event) : 0);
+          if (frame.data === '[DONE]') sawDone = true;
           if (frame.data === '[DONE]') break;
           const chunk = parseSSEJson(frame);
           const usage = openAIUsageToAnthropicUsage(chunk?.usage);
@@ -263,42 +304,42 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
             if (!textStarted) {
               textStarted = true;
               startedBlocks.add(0);
-              controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_start', data: {
+              enqueue(controller, encodeSSE({ event: 'content_block_start', data: {
                 type: 'content_block_start',
                 index: 0,
                 content_block: { type: 'text', text: '' },
-              } })));
+              } }));
             }
-            controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_delta', data: {
+            enqueue(controller, encodeSSE({ event: 'content_block_delta', data: {
               type: 'content_block_delta',
               index: 0,
               delta: { type: 'text_delta', text: content },
-            } })));
+            } }));
           }
           for (const toolCall of choice?.delta?.tool_calls ?? []) {
             const fn = toolCall.function ?? {};
             const blockIndex = (textStarted ? 1 : 0) + (typeof toolCall.index === 'number' ? toolCall.index : 0);
             if (!startedBlocks.has(blockIndex) && toolCall.id && fn.name) {
               startedBlocks.add(blockIndex);
-              controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_start', data: {
+              enqueue(controller, encodeSSE({ event: 'content_block_start', data: {
                 type: 'content_block_start',
                 index: blockIndex,
                 content_block: { type: 'tool_use', id: toolCall.id, name: fn.name, input: {} },
-              } })));
+              } }));
             }
             if (typeof fn.arguments === 'string' && fn.arguments.length > 0) {
-              controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_delta', data: {
+              enqueue(controller, encodeSSE({ event: 'content_block_delta', data: {
                 type: 'content_block_delta',
                 index: blockIndex,
                 delta: { type: 'input_json_delta', partial_json: fn.arguments },
-              } })));
+              } }));
             }
           }
           if (choice?.finish_reason) stopReason = mapStopReason(choice.finish_reason);
         }
       } catch (error) {
         failed = true;
-        controller.enqueue(encoder.encode(encodeSSE({
+        enqueue(controller, encodeSSE({
           event: 'error',
           data: {
             type: 'error',
@@ -307,19 +348,29 @@ async function streamAnthropicMessage(config: AppConfig, chatRequest: JsonObject
               message: error instanceof Error ? error.message : 'Upstream stream failed',
             },
           },
-        })));
+        }));
       }
       for (const index of [...startedBlocks].sort((a, b) => a - b)) {
-        controller.enqueue(encoder.encode(encodeSSE({ event: 'content_block_stop', data: { type: 'content_block_stop', index } })));
+        enqueue(controller, encodeSSE({ event: 'content_block_stop', data: { type: 'content_block_stop', index } }));
       }
       if (!failed) {
-        controller.enqueue(encoder.encode(encodeSSE({ event: 'message_delta', data: {
+        enqueue(controller, encodeSSE({ event: 'message_delta', data: {
           type: 'message_delta',
           delta: { stop_reason: stopReason, stop_sequence: null },
           usage: { output_tokens: outputTokens },
-        } })));
-        controller.enqueue(encoder.encode(encodeSSE({ event: 'message_stop', data: { type: 'message_stop' } })));
+        } }));
+        enqueue(controller, encodeSSE({ event: 'message_stop', data: { type: 'message_stop' } }));
+        endedCleanly = true;
       }
+      logStreamingResponseDiagnostics(logger, {
+        route: '/v1/messages',
+        upstream_sse_events_received: upstreamEvents,
+        downstream_sse_events_emitted: downstreamEvents,
+        upstream_bytes_received: upstreamBytes,
+        downstream_bytes_emitted: downstreamBytes,
+        final_done_marker_observed: sawDone,
+        upstream_ended_cleanly: endedCleanly,
+      });
       controller.close();
     },
   });
@@ -418,4 +469,10 @@ function anthropicType(status: number, type: string): string {
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseHeaderInt(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

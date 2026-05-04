@@ -2,7 +2,9 @@ import type { AppConfig } from '../config.ts';
 import { GatewayError, invalidRequestError, jsonResponse, unsupportedCapabilityError, upstreamError } from '../errors.ts';
 import { applyFieldPolicy, withFieldWarning } from '../field-policy.ts';
 import { ensureOpenAIStreamDone, streamHeaders } from '../normalize/stream.ts';
-import { upstreamFetch, upstreamHttpError, upstreamJson } from '../upstream/llama.ts';
+import { upstreamFetch, upstreamHttpError } from '../upstream/llama.ts';
+import { createLogger } from '../logger.ts';
+import { logStreamingResponseDiagnostics, logUpstreamPayloadDiagnostics } from '../truncation-diagnostics.ts';
 import { canonicalToUpstreamChatRequest, openAIChatRequestToCanonical } from '../internal/openai-chat.ts';
 import { canonicalToOpenAIChatCompletion, upstreamChatCompletionToCanonical } from '../internal/response.ts';
 
@@ -71,22 +73,39 @@ export class CompletionStore {
 }
 
 export async function createChatCompletion(config: AppConfig, store: CompletionStore, body: unknown): Promise<Response> {
+  const logger = createLogger(config.logLevel);
   if (!isObject(body)) throw invalidRequestError('JSON body must be an object');
   const original = body;
   const { body: normalized, strippedFields } = normalizeChatRequest(original, config);
+  logUpstreamPayloadDiagnostics(logger, {
+    route: '/v1/chat/completions',
+    upstream_route: '/v1/chat/completions',
+    payload: normalized,
+  });
 
   if (normalized.stream === true) return withFieldWarning(await streamChatCompletion(config, normalized), strippedFields, config);
 
-  const upstream = await upstreamJson(config, '/v1/chat/completions', {
+  const upstreamRes = await upstreamFetch(config, '/v1/chat/completions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(normalized),
   });
+  if (!upstreamRes.response.ok) throw await upstreamHttpError(upstreamRes.response);
+  const upstreamText = await upstreamRes.response.text();
+  const upstreamBytes = Buffer.byteLength(upstreamText);
+  let upstream: unknown;
+  try {
+    upstream = JSON.parse(upstreamText);
+  } catch {
+    throw upstreamError('bad_response', 'Upstream returned invalid JSON');
+  }
   const completion = normalizeCompletion(upstream, normalized.model, original.metadata);
   if (original.store === true) {
     store.save(completion, normalized.messages, config.completionTtlMs);
   }
-  return withFieldWarning(jsonResponse(completion), strippedFields, config);
+  const response = withFieldWarning(jsonResponse(completion), strippedFields, config);
+  response.headers.set('x-relay-internal-upstream-bytes', String(upstreamBytes));
+  return response;
 }
 
 export async function createCompletionShim(config: AppConfig, store: CompletionStore, body: unknown): Promise<Response> {
@@ -185,6 +204,7 @@ function normalizeChatRequest(input: JsonObject, config: AppConfig): { body: Jso
 }
 
 async function streamChatCompletion(config: AppConfig, body: JsonObject): Promise<Response> {
+  const logger = createLogger(config.logLevel);
   const includeUsage = isObject(body.stream_options) && body.stream_options.include_usage === true;
   const upstream = await upstreamFetch(config, '/v1/chat/completions', {
     method: 'POST',
@@ -200,10 +220,42 @@ async function streamChatCompletion(config: AppConfig, body: JsonObject): Promis
   if (!upstream.response.body) {
     throw upstreamError('bad_response', 'Upstream returned an empty stream');
   }
-  return new Response(ensureOpenAIStreamDone(upstream.response.body, includeUsage), {
+  let upstreamEvents = 0;
+  let downstreamEvents = 0;
+  let upstreamBytes = 0;
+  let downstreamBytes = 0;
+  let sawDone = false;
+  let endedCleanly = false;
+  const instrumented = ensureOpenAIStreamDone(upstream.response.body, includeUsage, {
+    onUpstreamFrame: (frame) => {
+      upstreamEvents += 1;
+      upstreamBytes += Buffer.byteLength(frame.data) + (frame.event ? Buffer.byteLength(frame.event) : 0);
+      if (frame.data === '[DONE]') sawDone = true;
+    },
+    onDownstreamChunk: (chunk) => {
+      downstreamEvents += 1;
+      downstreamBytes += Buffer.byteLength(chunk);
+    },
+    onUpstreamComplete: (clean) => {
+      endedCleanly = clean;
+    },
+  });
+  const response = new Response(instrumented, {
     status: 200,
     headers: streamHeaders(),
   });
+  queueMicrotask(() => {
+    logStreamingResponseDiagnostics(logger, {
+      route: '/v1/chat/completions',
+      upstream_sse_events_received: upstreamEvents,
+      downstream_sse_events_emitted: downstreamEvents,
+      upstream_bytes_received: upstreamBytes,
+      downstream_bytes_emitted: downstreamBytes,
+      final_done_marker_observed: sawDone,
+      upstream_ended_cleanly: endedCleanly,
+    });
+  });
+  return response;
 }
 
 function normalizeCompletion(raw: unknown, requestedModel: unknown, metadata: unknown): JsonObject {

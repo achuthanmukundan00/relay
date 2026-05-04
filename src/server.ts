@@ -12,6 +12,7 @@ import { createResponse, deleteResponse, getResponse, ResponseStore } from './op
 import { createLogger } from './logger.ts';
 import { captureRequest, classifyErrorSource, classifyFailure, detectProtocol, ObservabilityStore, routeLabel } from './observability.ts';
 import { activeProfile } from './profile.ts';
+import { detectProviderFormat, logInboundDiagnostics, logNonStreamingResponseDiagnostics } from './truncation-diagnostics.ts';
 
 type AppFetchInit = Omit<RequestInit, 'body'> & { body?: unknown };
 
@@ -106,7 +107,7 @@ export function createApp(config: AppConfig): App {
       }
       if (path === '/v1/chat/completions') {
         if (request.method === 'POST') {
-          const body = await readJson(request);
+          const body = await readJson(request, logger, path);
           requestModel = readRequestModel(body);
           response = await createChatCompletion(config, store, body);
           return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
@@ -117,25 +118,25 @@ export function createApp(config: AppConfig): App {
         }
       }
       if (path === '/v1/completions' && request.method === 'POST') {
-        const body = await readJson(request);
+        const body = await readJson(request, logger, path);
         requestModel = readRequestModel(body);
         response = await createCompletionShim(config, store, body);
         return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (path === '/v1/responses' && request.method === 'POST') {
-        const body = await readJson(request);
+        const body = await readJson(request, logger, path);
         requestModel = readRequestModel(body);
         response = await createResponse(config, responseStore, body);
         return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if (path === '/v1/embeddings' && request.method === 'POST') {
-        const body = await readJson(request);
+        const body = await readJson(request, logger, path);
         requestModel = readRequestModel(body);
         response = await createEmbedding(config, body);
         return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
       }
       if ((path === '/v1/rerank' || path === '/rerank') && request.method === 'POST') {
-        const body = await readJson(request);
+        const body = await readJson(request, logger, path);
         requestModel = readRequestModel(body);
         response = await createRerank(config, { ...(isObject(body) ? body : {}), upstream_path: path });
         return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
@@ -157,7 +158,7 @@ export function createApp(config: AppConfig): App {
       if (completionMatch) {
         const id = decodeURIComponent(completionMatch[1]);
         if (request.method === 'GET') response = getStoredCompletion(store, id);
-        else if (request.method === 'POST') response = await updateStoredCompletion(store, id, await readJson(request));
+        else if (request.method === 'POST') response = await updateStoredCompletion(store, id, await readJson(request, logger, path));
         else if (request.method === 'DELETE') response = deleteStoredCompletion(store, id);
         else response = openAIError(404, 'Not found');
         return finalizeResponse(response, requestId, path, request.method, startedAt, startedAtMs, requestModel);
@@ -220,6 +221,13 @@ export function createApp(config: AppConfig): App {
         let payload: any;
         if (!streaming) {
           payload = await currentResponse.json().catch(() => undefined);
+          const downstreamBytes = payload === undefined ? 0 : Buffer.byteLength(JSON.stringify(payload));
+          const upstreamBytes = parseHeaderInt(currentResponse.headers.get('x-relay-internal-upstream-bytes')) ?? 0;
+          logNonStreamingResponseDiagnostics(logger, {
+            route: currentPath,
+            upstream_response_bytes: upstreamBytes,
+            downstream_response_bytes: downstreamBytes,
+          });
         }
         const detail = extractObservabilityFields(payload);
         const errorSource = classifyErrorSource(detail.error_type, detail.error_code);
@@ -367,9 +375,17 @@ function authorizeRelay(config: AppConfig, request: Request, path: string): Resp
   return openAIError(401, 'Unauthorized', 'authentication_error');
 }
 
-async function readJson(request: Request): Promise<unknown> {
+async function readJson(request: Request, logger: ReturnType<typeof createLogger>, path: string): Promise<unknown> {
   try {
-    return await request.json();
+    const body = await request.json();
+    logInboundDiagnostics(logger, {
+      route: path,
+      provider_format: detectProviderFormat(path),
+      content_length_header: request.headers.get('content-length'),
+      raw_body_bytes: parseHeaderInt(request.headers.get('x-relay-internal-raw-body-bytes')),
+      parsed_body: body,
+    });
+    return body;
   } catch {
     throw invalidJsonError();
   }
@@ -391,9 +407,11 @@ async function nodeRequestToWebRequest(req: IncomingMessage, config: AppConfig):
     chunks.push(buffer);
   }
   const body = chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+  const headers = new Headers(req.headers as HeadersInit);
+  headers.set('x-relay-internal-raw-body-bytes', String(totalBytes));
   return new Request(`http://${config.host}:${config.port}${req.url ?? '/'}`, {
     method: req.method,
-    headers: req.headers as HeadersInit,
+    headers,
     body,
   });
 }
@@ -447,6 +465,12 @@ function readUpstreamStatus(response: Response): number | null {
 
 function isObject(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseHeaderInt(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 async function writeWebResponse(res: ServerResponse, response: Response) {

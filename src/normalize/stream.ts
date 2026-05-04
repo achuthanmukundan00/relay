@@ -18,12 +18,18 @@ export type ParsedSSEFrame = {
   data: string;
 };
 
+export type StreamDiagnosticsHooks = {
+  onUpstreamFrame?: (frame: ParsedSSEFrame) => void;
+  onDownstreamChunk?: (chunk: string) => void;
+  onUpstreamComplete?: (clean: boolean) => void;
+};
+
 export function encodeSSE(frame: SSEFrame): string {
   const data = typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data);
   return `${frame.event ? `event: ${frame.event}\n` : ''}data: ${data}\n\n`;
 }
 
-export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>, includeUsage = false): ReadableStream<Uint8Array> {
+export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>, includeUsage = false, hooks?: StreamDiagnosticsHooks): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -35,9 +41,10 @@ export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>, include
       let streamCreated: number | undefined;
       try {
         for await (const frame of parseSSEStream(body)) {
+          hooks?.onUpstreamFrame?.(frame);
           if (frame.data === '[DONE]') {
             if (includeUsage && latestUsage && !sawUsageOnlyChunk) {
-              controller.enqueue(encoder.encode(encodeSSE({
+              const usageChunk = encodeSSE({
                 data: {
                   id: streamId ?? `chatcmpl-${crypto.randomUUID()}`,
                   object: 'chat.completion.chunk',
@@ -46,11 +53,15 @@ export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>, include
                   choices: [],
                   usage: latestUsage,
                 },
-              })));
+              });
+              hooks?.onDownstreamChunk?.(usageChunk);
+              controller.enqueue(encoder.encode(usageChunk));
             }
             if (!sawDone) {
               sawDone = true;
-              controller.enqueue(encoder.encode(encodeSSE({ data: '[DONE]' })));
+              const doneChunk = encodeSSE({ data: '[DONE]' });
+              hooks?.onDownstreamChunk?.(doneChunk);
+              controller.enqueue(encoder.encode(doneChunk));
             }
             continue;
           }
@@ -63,15 +74,19 @@ export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>, include
             if (usage) latestUsage = usage;
             if (usage && Array.isArray(chunk.choices) && chunk.choices.length === 0) sawUsageOnlyChunk = true;
           }
-          controller.enqueue(encoder.encode(encodeSSE({ event: frame.event, data: chunk })));
+          const outChunk = encodeSSE({ event: frame.event, data: chunk });
+          hooks?.onDownstreamChunk?.(outChunk);
+          controller.enqueue(encoder.encode(outChunk));
         }
+        hooks?.onUpstreamComplete?.(true);
       } catch {
+        hooks?.onUpstreamComplete?.(false);
         // OpenAI chat streams do not have a clean post-start error frame. Close
         // the stream with a single done marker instead of leaking malformed SSE.
       }
       if (!sawDone) {
         if (includeUsage && latestUsage && !sawUsageOnlyChunk) {
-          controller.enqueue(encoder.encode(encodeSSE({
+          const usageChunk = encodeSSE({
             data: {
               id: streamId ?? `chatcmpl-${crypto.randomUUID()}`,
               object: 'chat.completion.chunk',
@@ -80,9 +95,13 @@ export function ensureOpenAIStreamDone(body: ReadableStream<Uint8Array>, include
               choices: [],
               usage: latestUsage,
             },
-          })));
+          });
+          hooks?.onDownstreamChunk?.(usageChunk);
+          controller.enqueue(encoder.encode(usageChunk));
         }
-        controller.enqueue(encoder.encode(encodeSSE({ data: '[DONE]' })));
+        const doneChunk = encodeSSE({ data: '[DONE]' });
+        hooks?.onDownstreamChunk?.(doneChunk);
+        controller.enqueue(encoder.encode(doneChunk));
       }
       controller.close();
     },
