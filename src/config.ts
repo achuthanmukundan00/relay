@@ -22,6 +22,7 @@ export type AppConfig = {
   observabilityEnabled: boolean;
   logPrompts: boolean;
   requestHistoryLimit: number;
+  upstreamCtxSize?: number;
 };
 
 export type UnknownFieldPolicy = 'pass_through' | 'strip' | 'reject';
@@ -72,6 +73,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     observabilityEnabled: readBoolean(env.RELAY_OBSERVABILITY_ENABLED, true),
     logPrompts: readBoolean(env.RELAY_LOG_PROMPTS, false),
     requestHistoryLimit: readInteger(env.RELAY_REQUEST_HISTORY_LIMIT, 100, 'RELAY_REQUEST_HISTORY_LIMIT'),
+    upstreamCtxSize: readOptionalNumber(env.UPSTREAM_CTX_SIZE, 'UPSTREAM_CTX_SIZE'),
   };
 }
 

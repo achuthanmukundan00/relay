@@ -9,6 +9,7 @@ Relay reads environment variables from process env (and commonly from `.env`).
 | `HOST` | `127.0.0.1` | Bind address |
 | `PORT` | `1234` | Bind port |
 | `UPSTREAM_BASE_URL` | `http://127.0.0.1:8080/v1` | Upstream API root |
+| `UPSTREAM_CTX_SIZE` | _(empty)_ | Running upstream context size (for example llama.cpp `--ctx-size`) exposed for clients |
 | `DEFAULT_MODEL` | _(empty)_ | Fallback model |
 | `REQUEST_TIMEOUT_SECONDS` | `600` | Upstream timeout |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` | Body size limit |

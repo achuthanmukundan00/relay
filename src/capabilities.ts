@@ -8,6 +8,7 @@ export type RelayCapabilities = {
     baseUrl: string;
     reachable: boolean;
     health: RelayCapabilityStatus;
+    contextSize?: number;
   };
   models: {
     list: RelayCapabilityStatus;
@@ -160,6 +161,7 @@ function initialCapabilities(config: AppConfig): RelayCapabilities {
       baseUrl: config.upstreamBaseUrl,
       reachable: false,
       health: 'unknown',
+      contextSize: config.upstreamCtxSize,
     },
     models: {
       list: 'unknown',
